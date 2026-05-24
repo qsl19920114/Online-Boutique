@@ -49,6 +49,8 @@ spec:
         env:
         - name: REDIS_ADDR
           value: "redis-cart:6379"
+        - name: DOTNET_EnableWriteXorExecute
+          value: "0"
         resources:
           requests:
             cpu: 200m
