@@ -35,6 +35,7 @@ metadata:
   labels:
     app: {{ .Values.checkoutService.name }}
 spec:
+  replicas: {{ .Values.checkoutService.replicas }}
   selector:
     matchLabels:
       app: {{ .Values.checkoutService.name }}
@@ -133,6 +134,30 @@ spec:
   - name: grpc
     port: 5050
     targetPort: 5050
+{{- if .Values.checkoutService.autoscaling.enabled }}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ .Values.checkoutService.name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ .Values.checkoutService.name }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ .Values.checkoutService.name }}
+  minReplicas: {{ .Values.checkoutService.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.checkoutService.autoscaling.maxReplicas }}
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: {{ .Values.checkoutService.autoscaling.averageCpuUtilization }}
+{{- end }}
 {{- if .Values.networkPolicies.create }}
 ---
 apiVersion: networking.k8s.io/v1

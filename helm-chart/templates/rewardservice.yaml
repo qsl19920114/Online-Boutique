@@ -26,6 +26,7 @@ metadata:
   labels:
     app: {{ .Values.rewardService.name }}
 spec:
+  replicas: {{ .Values.rewardService.replicas }}
   selector:
     matchLabels:
       app: {{ .Values.rewardService.name }}
@@ -102,6 +103,30 @@ spec:
   - name: http
     port: 80
     targetPort: 8080
+{{- if .Values.rewardService.autoscaling.enabled }}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ .Values.rewardService.name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ .Values.rewardService.name }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ .Values.rewardService.name }}
+  minReplicas: {{ .Values.rewardService.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.rewardService.autoscaling.maxReplicas }}
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: {{ .Values.rewardService.autoscaling.averageCpuUtilization }}
+{{- end }}
 {{- if .Values.networkPolicies.create }}
 ---
 apiVersion: networking.k8s.io/v1

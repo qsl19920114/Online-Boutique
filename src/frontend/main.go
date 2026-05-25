@@ -162,6 +162,8 @@ func main() {
 	r.HandleFunc(baseUrl+"/ads/stage-config", svc.adStageConfigHandler).Methods(http.MethodGet)
 	r.HandleFunc(baseUrl+"/rewards", svc.rewardsPageHandler).Methods(http.MethodGet)
 	r.HandleFunc(baseUrl+"/rewards/redeem", svc.redeemHandler).Methods(http.MethodPost)
+	r.HandleFunc(baseUrl+"/checkin/status", svc.checkInStatusHandler).Methods(http.MethodGet)
+	r.HandleFunc(baseUrl+"/checkin", svc.checkInHandler).Methods(http.MethodPost)
 	r.HandleFunc(baseUrl+"/track", svc.trackHandler).Methods(http.MethodPost)
 	r.HandleFunc(baseUrl+"/metrics", svc.metricsHandler).Methods(http.MethodGet)
 	r.PathPrefix(baseUrl + "/static/").Handler(http.StripPrefix(baseUrl+"/static/", http.FileServer(http.Dir("./static/"))))

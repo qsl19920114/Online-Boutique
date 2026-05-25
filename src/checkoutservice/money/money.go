@@ -132,6 +132,14 @@ func MultiplySlow(m pb.Money, n uint32) pb.Money {
 	return out
 }
 
+// Multiply returns m multiplied by n in constant time.
+func Multiply(m pb.Money, n uint32) pb.Money {
+	if n == 0 {
+		return pb.Money{CurrencyCode: m.GetCurrencyCode()}
+	}
+	return nanosToMoney(moneyToNanos(m)*int64(n), m.GetCurrencyCode())
+}
+
 // ApplyPayablePercent returns the discount and amount due for a coupon where
 // payablePct is the percentage of the original total the customer should pay.
 func ApplyPayablePercent(total pb.Money, payablePct int32) (pb.Money, pb.Money, error) {

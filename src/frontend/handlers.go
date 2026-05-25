@@ -24,6 +24,7 @@ import (
 	"math/rand"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -322,6 +323,7 @@ func (fe *frontendServer) viewCartHandler(w http.ResponseWriter, r *http.Request
 		"items":            items,
 		"expiration_years": []int{year, year + 1, year + 2, year + 3, year + 4},
 		"coin_balance":     fe.rewardBalanceOrDefault(r.Context(), sessionID(r)),
+		"ad":               fe.chooseAd(r.Context(), cartIDs(cart), log),
 	})); err != nil {
 		log.Println(err)
 	}
@@ -416,6 +418,7 @@ func (fe *frontendServer) placeOrderHandler(w http.ResponseWriter, r *http.Reque
 		"coupon_code":     order.GetOrder().GetCouponCode(),
 		"recommendations": recommendations,
 		"coin_balance":    fe.rewardBalanceOrDefault(r.Context(), sessionID(r)),
+		"ad":              fe.chooseAd(r.Context(), nil, log),
 	})); err != nil {
 		log.Println(err)
 	}
@@ -458,16 +461,46 @@ type rewardRedeemResponse struct {
 	RemainingBalance int    `json:"remaining_balance"`
 }
 
+type rewardCheckinStatusResponse struct {
+	SessionID   string                 `json:"session_id"`
+	Today       string                 `json:"today"`
+	CheckedIn   bool                   `json:"checked_in"`
+	Streak      int                    `json:"streak"`
+	NextReward  int                    `json:"next_reward"`
+	WeeklyBonus bool                   `json:"weekly_bonus"`
+	Calendar    []rewardCheckinDayView `json:"calendar"`
+}
+
+type rewardCheckinDayView struct {
+	Date    string `json:"date"`
+	Checked bool   `json:"checked"`
+	Coins   int    `json:"coins"`
+}
+
+type rewardCheckinResponse struct {
+	CoinsAdded  int    `json:"coins_added"`
+	Balance     int    `json:"balance"`
+	Streak      int    `json:"streak"`
+	WeeklyBonus bool   `json:"weekly_bonus"`
+	Today       string `json:"today"`
+}
+
 func (fe *frontendServer) watchAdHandler(w http.ResponseWriter, r *http.Request) {
-	frontendCounterInc("ad_click_total")
 	var payload struct {
-		AdID  string `json:"ad_id"`
-		Stage int    `json:"stage"`
+		AdID   string `json:"ad_id"`
+		Stage  int    `json:"stage"`
+		Style  string `json:"style"`
+		ShowIn string `json:"show_in"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	frontendCounterInc(fmt.Sprintf(
+		`ad_click_total{style="%s",show_in="%s"}`,
+		sanitizeMetricLabel(payload.Style),
+		sanitizeMetricLabel(payload.ShowIn),
+	))
 	var out map[string]interface{}
 	err := fe.rewardPost(r.Context(), "/earn", rewardEarnRequest{
 		SessionID: sessionID(r),
@@ -502,10 +535,12 @@ func (fe *frontendServer) rewardsPageHandler(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	balance := fe.rewardBalanceOrDefault(r.Context(), sessionID(r))
+	checkinStatus, _ := fe.getCheckinStatus(r.Context(), sessionID(r))
 	if err := templates.ExecuteTemplate(w, "rewards", injectCommonTemplateData(r, map[string]interface{}{
-		"show_currency": false,
-		"currencies":    currencies,
-		"coin_balance":  balance,
+		"show_currency":  false,
+		"currencies":     currencies,
+		"coin_balance":   balance,
+		"checkin_status": checkinStatus,
 	})); err != nil {
 		log.Println(err)
 	}
@@ -525,10 +560,12 @@ func (fe *frontendServer) redeemHandler(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	payload := map[string]interface{}{
-		"show_currency": false,
-		"currencies":    currencies,
-		"coin_balance":  fe.rewardBalanceOrDefault(r.Context(), sessionID(r)),
+		"show_currency":  false,
+		"currencies":     currencies,
+		"coin_balance":   fe.rewardBalanceOrDefault(r.Context(), sessionID(r)),
+		"checkin_status": nil,
 	}
+	payload["checkin_status"], _ = fe.getCheckinStatus(r.Context(), sessionID(r))
 	if err != nil {
 		payload["redeem_error"] = err.Error()
 	} else {
@@ -538,6 +575,36 @@ func (fe *frontendServer) redeemHandler(w http.ResponseWriter, r *http.Request) 
 	if err := templates.ExecuteTemplate(w, "rewards", injectCommonTemplateData(r, payload)); err != nil {
 		log.Println(err)
 	}
+}
+
+func (fe *frontendServer) checkInStatusHandler(w http.ResponseWriter, r *http.Request) {
+	status, err := fe.getCheckinStatus(r.Context(), sessionID(r))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	writeJSON(w, status)
+}
+
+func (fe *frontendServer) checkInHandler(w http.ResponseWriter, r *http.Request) {
+	frontendCounterInc("checkin_button_click_total")
+	var out rewardCheckinResponse
+	err := fe.rewardPost(r.Context(), "/checkin", map[string]string{
+		"session_id": sessionID(r),
+	}, &out)
+	if err != nil {
+		w.WriteHeader(http.StatusBadGateway)
+		writeJSON(w, map[string]interface{}{"ok": false, "error": err.Error()})
+		return
+	}
+	writeJSON(w, map[string]interface{}{
+		"ok":           true,
+		"coins_added":  out.CoinsAdded,
+		"balance":      out.Balance,
+		"streak":       out.Streak,
+		"weekly_bonus": out.WeeklyBonus,
+		"today":        out.Today,
+	})
 }
 
 func (fe *frontendServer) trackHandler(w http.ResponseWriter, r *http.Request) {
@@ -562,6 +629,7 @@ func (fe *frontendServer) metricsHandler(w http.ResponseWriter, r *http.Request)
 	fmt.Fprintln(w, "# TYPE checkout_success_total counter")
 	fmt.Fprintln(w, "# TYPE checkout_failure_total counter")
 	fmt.Fprintln(w, "# TYPE track_total counter")
+	fmt.Fprintln(w, "# TYPE checkin_button_click_total counter")
 	for name, value := range frontendCounters {
 		fmt.Fprintf(w, "%s %d\n", name, value)
 	}
@@ -581,6 +649,15 @@ func (fe *frontendServer) getRewardBalance(ctx context.Context, sessionID string
 		return 0, err
 	}
 	return out.Balance, nil
+}
+
+func (fe *frontendServer) getCheckinStatus(ctx context.Context, sessionID string) (*rewardCheckinStatusResponse, error) {
+	var out rewardCheckinStatusResponse
+	path := "/checkin/status?session_id=" + url.QueryEscape(sessionID)
+	if err := fe.rewardGet(ctx, path, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
 func (fe *frontendServer) rewardGet(ctx context.Context, path string, out interface{}) error {
@@ -641,6 +718,23 @@ func frontendCounterInc(name string) {
 	frontendCountersMu.Lock()
 	defer frontendCountersMu.Unlock()
 	frontendCounters[name]++
+}
+
+func sanitizeMetricLabel(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "unknown"
+	}
+	var out strings.Builder
+	for _, item := range value {
+		if item >= 'a' && item <= 'z' || item >= 'A' && item <= 'Z' || item >= '0' && item <= '9' || item == '-' || item == '_' {
+			out.WriteRune(item)
+		}
+	}
+	if out.Len() == 0 {
+		return "unknown"
+	}
+	return out.String()
 }
 
 func (fe *frontendServer) logoutHandler(w http.ResponseWriter, r *http.Request) {
@@ -756,6 +850,9 @@ func (fe *frontendServer) chooseAd(ctx context.Context, ctxKeys []string, log lo
 	ads, err := fe.getAd(ctx, ctxKeys)
 	if err != nil {
 		log.WithField("error", err).Warn("failed to retrieve ads")
+		return nil
+	}
+	if len(ads) == 0 {
 		return nil
 	}
 	return ads[rand.Intn(len(ads))]

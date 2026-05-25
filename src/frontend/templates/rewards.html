@@ -7,6 +7,29 @@
             <p>Balance: <strong>{{ $.coin_balance }}</strong> coins</p>
         </div>
 
+        {{ if $.checkin_status }}
+        <div class="reward-checkin-panel" id="reward-checkin-panel">
+            <div class="reward-checkin-summary">
+                <div>
+                    <span>Daily check-in</span>
+                    <h4>{{ $.checkin_status.Streak }} day streak</h4>
+                    <p>Today's reward: {{ $.checkin_status.NextReward }} coins</p>
+                </div>
+                <button class="cymbal-button-primary" id="reward-checkin-button" type="button" {{ if $.checkin_status.CheckedIn }}disabled{{ end }}>
+                    {{ if $.checkin_status.CheckedIn }}Checked in{{ else }}Check in{{ end }}
+                </button>
+            </div>
+            <div class="reward-checkin-calendar">
+                {{ range $.checkin_status.Calendar }}
+                <div class="reward-checkin-day {{ if .Checked }}is-checked{{ end }}">
+                    <span>{{ .Date }}</span>
+                    <strong>{{ .Coins }}</strong>
+                </div>
+                {{ end }}
+            </div>
+        </div>
+        {{ end }}
+
         {{ if $.redeem_error }}
         <div class="reward-alert">{{ $.redeem_error }}</div>
         {{ end }}
@@ -35,5 +58,24 @@
         </div>
     </section>
 </main>
+<script>
+(function () {
+    const button = document.getElementById('reward-checkin-button');
+    if (!button || button.disabled) return;
+    button.addEventListener('click', async function () {
+        button.disabled = true;
+        const res = await fetch('{{ $.baseUrl }}/checkin', {method: 'POST'});
+        const data = await res.json();
+        if (data.ok) {
+            const balance = document.querySelector('.reward-balance');
+            if (balance) balance.textContent = data.balance;
+            window.location.href = '{{ $.baseUrl }}/rewards';
+            return;
+        }
+        button.disabled = false;
+        button.textContent = 'Try again';
+    });
+})();
+</script>
 {{ template "footer" . }}
 {{ end }}

@@ -57,6 +57,15 @@ var (
 	checkoutFailureTotal        uint64
 	checkoutCouponValidateTotal uint64
 	checkoutCouponCommitTotal   uint64
+	rewardHTTPClient            = &http.Client{
+		Transport: &http.Transport{
+			MaxIdleConns:          100,
+			MaxIdleConnsPerHost:   50,
+			IdleConnTimeout:       90 * time.Second,
+			TLSHandshakeTimeout:   3 * time.Second,
+			ResponseHeaderTimeout: 2 * time.Second,
+		},
+	}
 )
 
 func init() {
@@ -266,7 +275,7 @@ func (cs *checkoutService) PlaceOrder(ctx context.Context, req *pb.PlaceOrderReq
 		Nanos: 0}
 	total = money.Must(money.Sum(total, *prep.shippingCostLocalized))
 	for _, it := range prep.orderItems {
-		multPrice := money.MultiplySlow(*it.Cost, uint32(it.GetItem().GetQuantity()))
+		multPrice := money.Multiply(*it.Cost, uint32(it.GetItem().GetQuantity()))
 		total = money.Must(money.Sum(total, multPrice))
 	}
 
@@ -412,7 +421,7 @@ func (cs *checkoutService) prepOrderItems(ctx context.Context, items []*pb.CartI
 }
 
 func (cs *checkoutService) convertCurrency(ctx context.Context, from *pb.Money, toCurrency string) (*pb.Money, error) {
-	result, err := pb.NewCurrencyServiceClient(cs.currencySvcConn).Convert(context.TODO(), &pb.CurrencyConversionRequest{
+	result, err := pb.NewCurrencyServiceClient(cs.currencySvcConn).Convert(ctx, &pb.CurrencyConversionRequest{
 		From:   from,
 		ToCode: toCurrency})
 	if err != nil {
@@ -489,7 +498,7 @@ func (cs *checkoutService) postReward(ctx context.Context, path string, payload 
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := rewardHTTPClient.Do(req)
 	if err != nil {
 		return err
 	}

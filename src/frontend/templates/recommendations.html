@@ -21,19 +21,22 @@
         <div class="col-xl-10 offset-xl-1">
           <h2>You May Also Like</h2>
           <div class="row">
-            {{ range .recommendations }}
+            {{ range $index, $recommendation := .recommendations }}
             <div class="col-md-3">
               <div>
-                <a href="{{ $.baseUrl }}/product/{{.Id}}">
-                  <img alt="" src="{{ $.baseUrl }}{{.Picture}}">
+                <a href="{{ $.baseUrl }}/product/{{$recommendation.Id}}">
+                  <img alt="" src="{{ $.baseUrl }}{{$recommendation.Picture}}">
                 </a>
                 <div>
                   <h5>
-                    {{ .Name }}
+                    {{ $recommendation.Name }}
                   </h5>
                 </div>
               </div>
             </div>
+            {{ if eq $index 1 }}
+              {{ template "ad_wide_card" $ }}
+            {{ end }}
             {{ end }}
           </div>
         </div>

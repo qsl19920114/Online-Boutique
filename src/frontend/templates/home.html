@@ -43,20 +43,28 @@
             <h3>Hot Products</h3>
           </div>
 
-          {{ range $.products }}
+          {{ range $index, $product := $.products }}
           <div class="col-md-4 hot-product-card">
-            <a href="{{ $.baseUrl }}/product/{{.Item.Id}}">
-              <img loading="lazy" src="{{ $.baseUrl }}{{.Item.Picture}}">
+            <a href="{{ $.baseUrl }}/product/{{$product.Item.Id}}">
+              <img loading="lazy" src="{{ $.baseUrl }}{{$product.Item.Picture}}">
               <div class="hot-product-card-img-overlay"></div>
             </a>
             <div>
-              <div class="hot-product-card-name">{{ .Item.Name }}</div>
-              <div class="hot-product-card-price">{{ renderMoney .Price }}</div>
+              <div class="hot-product-card-name">{{ $product.Item.Name }}</div>
+              <div class="hot-product-card-price">{{ renderMoney $product.Price }}</div>
             </div>
           </div>
+          {{ if eq $index 2 }}
+            {{ template "ad_card" $ }}
+          {{ end }}
           {{ end }}
 
         </div>
+
+        {{ if $.ad }}
+          {{ template "ad_float" . }}
+          {{ template "ad_modal" . }}
+        {{ end }}
 
         <!-- Footer for larger screens. -->
         <div class="row d-none d-lg-block home-desktop-footer-row">

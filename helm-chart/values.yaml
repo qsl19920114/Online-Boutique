@@ -84,6 +84,12 @@ cartService:
 checkoutService:
   create: true
   name: checkoutservice
+  replicas: 2
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 5
+    averageCpuUtilization: 70
   resources:
     requests:
       cpu: 100m
@@ -189,6 +195,12 @@ recommendationService:
 rewardService:
   create: true
   name: rewardservice
+  replicas: 2
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 5
+    averageCpuUtilization: 70
   resources:
     requests:
       cpu: 100m

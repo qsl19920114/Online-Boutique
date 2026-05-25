@@ -15,58 +15,267 @@
 -->
 
 {{ define "text_ad" }}
+    {{ template "ad_banner" . }}
+{{ end }}
+
+{{ define "ad_banner" }}
+{{ if $.ad }}
 <div class="container py-3 px-lg-5 py-lg-5">
-    <div role="alert" class="reward-ad-panel">
-        <strong>Ad</strong>
-        <a href="{{$.baseUrl}}{{.ad.RedirectUrl}}" rel="nofollow noopener noreferrer" target="_blank">
-            {{.ad.Text}}
-        </a>
-        <button class="cymbal-button-primary reward-ad-button" type="button" data-ad-id="{{.ad.Text}}">
+    <div role="complementary" class="reward-ad-panel reward-ad-banner">
+        <div>
+            <strong>Sponsored</strong>
+            <a href="{{$.baseUrl}}{{.ad.RedirectUrl}}" rel="nofollow noopener noreferrer" target="_blank">
+                {{.ad.Text}}
+            </a>
+        </div>
+        <button class="cymbal-button-primary reward-ad-button" type="button"
+            data-ad-id="{{.ad.Text}}"
+            data-ad-text="{{.ad.Text}}"
+            data-ad-url="{{$.baseUrl}}{{.ad.RedirectUrl}}"
+            data-ad-style="banner"
+            data-ad-show-in="product">
             Watch ad, earn coins
         </button>
     </div>
 </div>
-<div class="reward-modal-backdrop" id="reward-modal-backdrop" hidden>
-    <div class="reward-modal" role="dialog" aria-modal="true">
-        <div class="reward-modal-title" id="reward-modal-title">Watch ad</div>
-        <div class="reward-progress">
-            <div class="reward-progress-bar" id="reward-progress-bar"></div>
-        </div>
-        <p id="reward-modal-copy">Keep watching to unlock coins.</p>
-        <div class="reward-modal-actions">
-            <button class="cymbal-button-secondary" id="reward-exit-button" type="button">Claim now</button>
-            <button class="cymbal-button-primary" id="reward-continue-button" type="button">Continue</button>
+{{ end }}
+{{ end }}
+
+{{ define "ad_card" }}
+{{ if $.ad }}
+<div class="col-md-4 hot-product-card reward-ad-card-slot">
+    <div class="reward-ad-card">
+        <div class="reward-ad-card-media"></div>
+        <div class="reward-ad-card-body">
+            <span>Sponsored</span>
+            <h4>{{ .ad.Text }}</h4>
+            <button class="cymbal-button-primary reward-ad-button" type="button"
+                data-ad-id="{{.ad.Text}}"
+                data-ad-text="{{.ad.Text}}"
+                data-ad-url="{{$.baseUrl}}{{.ad.RedirectUrl}}"
+                data-ad-style="card"
+                data-ad-show-in="home">
+                Earn coins
+            </button>
         </div>
     </div>
 </div>
+{{ end }}
+{{ end }}
+
+{{ define "ad_wide_card" }}
+{{ if $.ad }}
+<div class="col-md-6 reward-ad-wide-col">
+    <div class="reward-ad-wide-card">
+        <div class="reward-ad-wide-media"></div>
+        <div class="reward-ad-wide-copy">
+            <span>Sponsored reward</span>
+            <h4>{{ .ad.Text }}</h4>
+            <button class="cymbal-button-primary reward-ad-button" type="button"
+                data-ad-id="{{.ad.Text}}"
+                data-ad-text="{{.ad.Text}}"
+                data-ad-url="{{$.baseUrl}}{{.ad.RedirectUrl}}"
+                data-ad-style="wide-card"
+                data-ad-show-in="recommendations">
+                Watch for coins
+            </button>
+        </div>
+    </div>
+</div>
+{{ end }}
+{{ end }}
+
+{{ define "ad_compact" }}
+{{ if $.ad }}
+<div class="reward-ad-compact" role="complementary">
+    <div>
+        <span>Coin boost</span>
+        <strong>{{ .ad.Text }}</strong>
+    </div>
+    <button class="cymbal-button-primary reward-ad-button" type="button"
+        data-ad-id="{{.ad.Text}}"
+        data-ad-text="{{.ad.Text}}"
+        data-ad-url="{{$.baseUrl}}{{.ad.RedirectUrl}}"
+        data-ad-style="compact"
+        data-ad-show-in="cart">
+        Earn
+    </button>
+</div>
+{{ end }}
+{{ end }}
+
+{{ define "ad_float" }}
+{{ if $.ad }}
+<button class="reward-ad-float reward-ad-button" type="button"
+    data-ad-id="{{.ad.Text}}"
+    data-ad-text="{{.ad.Text}}"
+    data-ad-url="{{$.baseUrl}}{{.ad.RedirectUrl}}"
+    data-ad-style="float"
+    data-ad-show-in="global"
+    title="Watch ad, earn coins">
+    <span>Coins</span>
+    <strong>+20</strong>
+</button>
+{{ end }}
+{{ end }}
+
+{{ define "ad_thank" }}
+{{ if $.ad }}
+<div class="reward-ad-thank">
+    <div>
+        <span>One more reward</span>
+        <h4>Thanks for your order.</h4>
+        <p>{{ .ad.Text }}</p>
+    </div>
+    <button class="cymbal-button-primary reward-ad-button" type="button"
+        data-ad-id="{{.ad.Text}}"
+        data-ad-text="{{.ad.Text}}"
+        data-ad-url="{{$.baseUrl}}{{.ad.RedirectUrl}}"
+        data-ad-style="thank"
+        data-ad-show-in="order">
+        Watch and earn coins
+    </button>
+</div>
+{{ end }}
+{{ end }}
+
+{{ define "ad_modal" }}
+{{ if $.ad }}
+<div class="reward-modal-backdrop" id="reward-modal-backdrop" hidden>
+    <div class="reward-modal" role="dialog" aria-modal="true">
+        <div class="reward-modal-ad" id="reward-ad-area">
+            <span class="reward-modal-ad-badge">Sponsored</span>
+            <div class="reward-modal-ad-image" id="reward-ad-image"></div>
+            <div class="reward-modal-ad-text">
+                <span id="reward-ad-headline"></span>
+                <a id="reward-ad-link" href="#" rel="nofollow noopener noreferrer" target="_blank"
+                   class="reward-modal-ad-cta">Shop Now</a>
+            </div>
+        </div>
+
+        <div class="reward-modal-earn">
+            <div class="reward-modal-earn-row">
+                <span class="reward-modal-title" id="reward-modal-title">Watch ad, earn coins</span>
+                <span class="reward-modal-timer" id="reward-modal-timer"></span>
+            </div>
+            <div class="reward-progress">
+                <div class="reward-progress-bar" id="reward-progress-bar"></div>
+            </div>
+            <p id="reward-modal-copy" class="reward-modal-copy">
+                Keep watching to unlock coins.
+            </p>
+            <div class="reward-stage-list" id="reward-stage-list"></div>
+            <div class="reward-modal-actions">
+                <button class="cymbal-button-secondary reward-modal-skip-btn" id="reward-skip-button" type="button">Skip</button>
+                <button class="cymbal-button-secondary" id="reward-exit-button" type="button" style="display:none">Claim now</button>
+                <button class="cymbal-button-primary" id="reward-continue-button" type="button" style="display:none">Continue</button>
+            </div>
+        </div>
+    </div>
+</div>
+
 <script>
 (function () {
-    const button = document.querySelector('.reward-ad-button');
-    if (!button) return;
+    const buttons = document.querySelectorAll('.reward-ad-button');
+    if (!buttons.length) return;
 
-    const backdrop = document.getElementById('reward-modal-backdrop');
-    const title = document.getElementById('reward-modal-title');
-    const copy = document.getElementById('reward-modal-copy');
-    const progress = document.getElementById('reward-progress-bar');
-    const exitButton = document.getElementById('reward-exit-button');
+    const backdrop    = document.getElementById('reward-modal-backdrop');
+    const adImage     = document.getElementById('reward-ad-image');
+    const adHeadline  = document.getElementById('reward-ad-headline');
+    const adLink      = document.getElementById('reward-ad-link');
+    const title       = document.getElementById('reward-modal-title');
+    const timerEl     = document.getElementById('reward-modal-timer');
+    const copy        = document.getElementById('reward-modal-copy');
+    const progress    = document.getElementById('reward-progress-bar');
+    const stageList   = document.getElementById('reward-stage-list');
+    const skipButton  = document.getElementById('reward-skip-button');
+    const exitButton  = document.getElementById('reward-exit-button');
     const continueButton = document.getElementById('reward-continue-button');
+
+    const adImages = [
+        '{{$.baseUrl}}/static/img/products/watch.jpg',
+        '{{$.baseUrl}}/static/img/products/sunglasses.jpg',
+        '{{$.baseUrl}}/static/img/products/loafers.jpg',
+        '{{$.baseUrl}}/static/img/products/hairdryer.jpg',
+        '{{$.baseUrl}}/static/img/products/candle-holder.jpg',
+        '{{$.baseUrl}}/static/img/products/bamboo-glass-jar.jpg',
+        '{{$.baseUrl}}/static/img/products/mug.jpg',
+        '{{$.baseUrl}}/static/img/products/tank-top.jpg'
+    ];
+
+    let activeButton = null;
     let config = null;
     let elapsed = 0;
     let timer = null;
     let checkpoint = null;
 
-    button.addEventListener('click', async function () {
-        const res = await fetch('{{$.baseUrl}}/ads/stage-config');
-        config = await res.json();
+    buttons.forEach(function (button) {
+        button.addEventListener('click', function () {
+            openRewardModal(button);
+        });
+    });
+
+    function resetModal() {
+        title.textContent = 'Watch ad, earn coins';
+        copy.textContent = 'Keep watching to unlock coins.';
+        progress.style.width = '0%';
+        timerEl.textContent = '';
+        stageList.innerHTML = '';
+        skipButton.style.display = '';
+        exitButton.style.display = 'none';
+        continueButton.style.display = 'none';
+        exitButton.hidden = false;
+        continueButton.hidden = false;
+    }
+
+    async function openRewardModal(button) {
+        activeButton = button;
+        window.clearInterval(timer);
+        resetModal();
+        try {
+            const res = await fetch('{{$.baseUrl}}/ads/stage-config');
+            config = await res.json();
+        } catch (err) {
+            title.textContent = 'Reward service unavailable';
+            copy.textContent = 'Please try again in a moment.';
+            backdrop.hidden = false;
+            return;
+        }
         elapsed = 0;
         checkpoint = null;
+
+        const img = adImages[Math.floor(Math.random() * adImages.length)];
+        adImage.style.backgroundImage = 'url(' + img + ')';
+        adHeadline.textContent = button.dataset.adText || button.dataset.adId || 'Special offer';
+        adLink.href = button.dataset.adUrl || '#';
+        renderStages();
+
         backdrop.hidden = false;
         tick();
         timer = window.setInterval(tick, 1000);
+    }
+
+    function renderStages() {
+        stageList.innerHTML = '';
+        config.stages.forEach(function (stage) {
+            const item = document.createElement('span');
+            item.textContent = stage.trigger_sec + 's / +' + stage.coins;
+            item.dataset.stage = stage.stage;
+            stageList.appendChild(item);
+        });
+    }
+
+    skipButton.addEventListener('click', function () {
+        window.clearInterval(timer);
+        backdrop.hidden = true;
     });
 
     continueButton.addEventListener('click', function () {
         checkpoint = null;
+        continueButton.style.display = 'none';
+        exitButton.style.display = 'none';
+        skipButton.style.display = '';
+        title.textContent = 'Watch ad, earn coins';
         timer = window.setInterval(tick, 1000);
     });
 
@@ -77,35 +286,75 @@
     async function tick() {
         elapsed += 1;
         const total = config.stages[config.stages.length - 1].trigger_sec;
+        const remaining = Math.max(0, total - elapsed);
         progress.style.width = Math.min(100, elapsed / total * 100) + '%';
-        checkpoint = config.stages.find(function (stage) { return stage.trigger_sec === elapsed; });
+        timerEl.textContent = remaining > 0 ? 'Ad ends in ' + remaining + 's' : '';
+
+        checkpoint = config.stages.find(function (s) { return s.trigger_sec === elapsed; });
         if (!checkpoint) return;
+        markStage(checkpoint.stage);
         window.clearInterval(timer);
+
         if (checkpoint.stage === config.stages[config.stages.length - 1].stage) {
             await submitEarn(checkpoint.stage);
             return;
         }
+
         const maxCoins = config.stages[config.stages.length - 1].coins;
         title.textContent = 'Unlocked ' + checkpoint.coins + ' coins';
-        copy.textContent = 'Claim now, or keep watching to reach ' + maxCoins + ' coins.';
+        copy.textContent = 'Claim now, or keep watching to earn up to ' + maxCoins + ' coins.';
         exitButton.textContent = 'Claim ' + checkpoint.coins + ' coins';
-        continueButton.textContent = 'Continue';
+        continueButton.textContent = 'Keep watching';
+        skipButton.style.display = 'none';
+        exitButton.style.display = '';
+        continueButton.style.display = '';
+    }
+
+    function markStage(stage) {
+        stageList.querySelectorAll('span').forEach(function (item) {
+            if (Number(item.dataset.stage) <= stage) {
+                item.classList.add('is-unlocked');
+            }
+        });
     }
 
     async function submitEarn(stage) {
         const res = await fetch('{{$.baseUrl}}/ads/watch', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ad_id: button.dataset.adId || 'default-ad', stage: stage})
+            body: JSON.stringify({
+                ad_id: activeButton.dataset.adId || 'default-ad',
+                stage: stage,
+                style: activeButton.dataset.adStyle || 'unknown',
+                show_in: activeButton.dataset.adShowIn || 'unknown'
+            })
         });
         const data = await res.json();
-        if (data.ok && typeof data.balance !== 'undefined') {
-            const balance = document.querySelector('.reward-balance');
-            if (balance) balance.textContent = data.balance;
-        }
-        backdrop.hidden = true;
         window.clearInterval(timer);
+        if (data.ok && typeof data.balance !== 'undefined') {
+            const balanceEl = document.querySelector('.reward-balance');
+            if (balanceEl) balanceEl.textContent = data.balance;
+            title.textContent = '+' + data.coins_added + ' coins earned';
+            copy.textContent = 'Your balance is now ' + data.balance + ' coins. Visit Rewards Center to redeem.';
+            progress.style.width = '100%';
+            timerEl.textContent = '';
+            skipButton.style.display = 'none';
+            exitButton.hidden = true;
+            continueButton.hidden = true;
+            setTimeout(function () {
+                backdrop.hidden = true;
+                resetModal();
+            }, 2000);
+        } else {
+            title.textContent = 'Reward not available';
+            copy.textContent = data.error || 'Please try another ad in a moment.';
+            timerEl.textContent = '';
+            skipButton.style.display = '';
+            exitButton.hidden = true;
+            continueButton.hidden = true;
+        }
     }
 })();
 </script>
+{{ end }}
 {{ end }}

@@ -79,6 +79,9 @@
                     {{renderMoney .total_paid}}
                 </div>
             </div>
+            {{ if $.ad }}
+                {{ template "ad_thank" . }}
+            {{ end }}
             <div class="row">
                 <div class="col-12 text-center">
                     <a class="cymbal-button-primary" href="{{ $.baseUrl }}/" role="button">
@@ -94,5 +97,9 @@
 
     </main>
 
+    {{ if $.ad }}
+        {{ template "ad_float" . }}
+        {{ template "ad_modal" . }}
+    {{ end }}
     {{ template "footer" . }}
     {{ end }}

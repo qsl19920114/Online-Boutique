@@ -82,5 +82,9 @@
   </div>
 
 </main>
+{{ if $.ad }}
+  {{ template "ad_float" . }}
+  {{ template "ad_modal" . }}
+{{ end }}
 {{ template "footer" . }}
 {{ end }}

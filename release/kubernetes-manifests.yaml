@@ -123,7 +123,8 @@ spec:
                 - ALL
             privileged: false
             readOnlyRootFilesystem: true
-          image: us-central1-docker.pkg.dev/google-samples/microservices-demo/checkoutservice:v0.10.2
+          image: checkoutservice:latest
+          imagePullPolicy: Never
           ports:
           - containerPort: 5050
           readinessProbe:
@@ -147,6 +148,8 @@ spec:
             value: "currencyservice:7000"
           - name: CART_SERVICE_ADDR
             value: "cartservice:7070"
+          - name: REWARD_SERVICE_ADDR
+            value: "rewardservice:80"
           resources:
             requests:
               cpu: 100m
@@ -284,7 +287,8 @@ spec:
                 - ALL
             privileged: false
             readOnlyRootFilesystem: true
-          image: us-central1-docker.pkg.dev/google-samples/microservices-demo/frontend:v0.10.2
+          image: frontend:latest
+          imagePullPolicy: Never
           ports:
           - containerPort: 8080
           readinessProbe:
@@ -322,6 +326,8 @@ spec:
             value: "adservice:9555"
           - name: SHOPPING_ASSISTANT_SERVICE_ADDR
             value: "shoppingassistantservice:80"
+          - name: REWARD_SERVICE_ADDR
+            value: "rewardservice:80"
           # # ENV_PLATFORM: One of: local, gcp, aws, azure, onprem, alibaba
           # # When not set, defaults to "local" unless running in GKE, otherwies auto-sets to gcp
           # - name: ENV_PLATFORM
@@ -975,4 +981,88 @@ apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: adservice
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rewardservice
+  labels:
+    app: rewardservice
+spec:
+  selector:
+    matchLabels:
+      app: rewardservice
+  template:
+    metadata:
+      labels:
+        app: rewardservice
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: rewardservice
+      terminationGracePeriodSeconds: 5
+      securityContext:
+        fsGroup: 1000
+        runAsGroup: 1000
+        runAsNonRoot: true
+        runAsUser: 1000
+      containers:
+      - name: server
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+              - ALL
+          privileged: false
+          readOnlyRootFilesystem: false
+        image: rewardservice:latest
+        imagePullPolicy: Never
+        ports:
+        - containerPort: 8080
+        readinessProbe:
+          periodSeconds: 5
+          httpGet:
+            path: "/_healthz"
+            port: 8080
+        livenessProbe:
+          periodSeconds: 5
+          httpGet:
+            path: "/_healthz"
+            port: 8080
+        env:
+        - name: PORT
+          value: "8080"
+        - name: REDIS_ADDR
+          value: "redis-cart:6379"
+        - name: PYTHONDONTWRITEBYTECODE
+          value: "1"
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 200m
+            memory: 256Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rewardservice
+  labels:
+    app: rewardservice
+spec:
+  type: ClusterIP
+  selector:
+    app: rewardservice
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8080
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: rewardservice
 # [END gke_release_kubernetes_manifests_microservices_demo]

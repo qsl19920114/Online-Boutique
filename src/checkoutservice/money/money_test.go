@@ -303,3 +303,24 @@ func TestApplyPayablePercent(t *testing.T) {
 		})
 	}
 }
+
+func TestMultiply(t *testing.T) {
+	tests := []struct {
+		name string
+		in   pb.Money
+		n    uint32
+		want pb.Money
+	}{
+		{"zero multiplier", mmc(12, 340000000, "USD"), 0, mmc(0, 0, "USD")},
+		{"whole units", mmc(7, 0, "USD"), 3, mmc(21, 0, "USD")},
+		{"carries nanos", mmc(1, 750000000, "USD"), 3, mmc(5, 250000000, "USD")},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := Multiply(tt.in, tt.n)
+			if !AreEquals(got, tt.want) {
+				t.Fatalf("Multiply(%v, %d) = %v, want %v", tt.in, tt.n, got, tt.want)
+			}
+		})
+	}
+}

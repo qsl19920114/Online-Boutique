@@ -100,6 +100,9 @@
                 <div class="col-lg-5 offset-lg-1 col-xl-4">
 
                     <form class="cart-checkout-form" action="{{ $.baseUrl }}/cart/checkout" method="POST">
+                        {{ if $.ad }}
+                            {{ template "ad_compact" . }}
+                        {{ end }}
 
                         <div class="row">
                             <div class="col">
@@ -238,5 +241,9 @@
         {{ template "recommendations" $ }}
     {{ end }}
 
+    {{ if $.ad }}
+        {{ template "ad_float" . }}
+        {{ template "ad_modal" . }}
+    {{ end }}
     {{ template "footer" . }}
 {{ end }}
