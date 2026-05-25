@@ -25,7 +25,8 @@
 <main role="main">
   <div class="h-product container">
     <div class="row">
-      <div class="col-md-6">
+      <div class="col-md-6" style="position:relative">
+        {{ template "ad_subsidy_badge" . }}
         <img class="product-image" alt="" src="{{ $.baseUrl }}{{$.product.Item.Picture}}" />
       </div>
       <div class="product-info col-md-5">
@@ -86,5 +87,7 @@
   {{ template "ad_float" . }}
   {{ template "ad_modal" . }}
 {{ end }}
+{{ template "ad_sidebar" . }}
+{{ template "ad_rush_widget" . }}
 {{ template "footer" . }}
 {{ end }}

@@ -17,6 +17,7 @@
 {{ define "home" }}
 
 {{ template "header" . }}
+{{ template "ad_top_bar" . }}
 <div {{ with $.platform_css }} class="{{.}}" {{ end }}>
   <span class="platform-flag">
     {{$.platform_name}}
@@ -84,5 +85,8 @@
 <div class="d-lg-none">
   {{ template "footer" . }}
 </div>
+
+{{ template "ad_sidebar" . }}
+{{ template "ad_rush_widget" . }}
 
 {{ end }}

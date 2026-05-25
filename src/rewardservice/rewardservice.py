@@ -33,8 +33,31 @@ DEFAULT_RATELIMITS = {
     "checkin": 5,
     "redeem": 10,
     "coupon": 30,
+    "flash": 10,
+    "rush": 10,
 }
 RATELIMIT_TTL_SEC = 120
+
+# 秒杀优惠券配置
+FLASH_POOL_SIZE = int(os.getenv("FLASH_POOL_SIZE", "50"))
+FLASH_DURATION_SEC = int(os.getenv("FLASH_DURATION_SEC", "600"))   # 10分钟
+FLASH_DISCOUNT_PCT = int(os.getenv("FLASH_DISCOUNT_PCT", "70"))    # 7折
+FLASH_COST_COINS = int(os.getenv("FLASH_COST_COINS", "0"))         # 免费抢
+# 整点抢金币配置
+RUSH_POOL_SIZE = int(os.getenv("RUSH_POOL_SIZE", "100"))
+RUSH_COINS_PER_CLAIM = int(os.getenv("RUSH_COINS_PER_CLAIM", "10"))
+RUSH_DURATION_SEC = int(os.getenv("RUSH_DURATION_SEC", "300"))      # 整点后5分钟
+# 百亿补贴商品表（product_id: {discount_pct, label}）
+SUBSIDY_PRODUCTS = {
+    "OLJCESPC7Z": {"discount_pct": 20, "label": "亿补价"},
+    "66VCHSJNUP": {"discount_pct": 15, "label": "亿补价"},
+    "1YMWWN1N4O": {"discount_pct": 25, "label": "亿补价"},
+    "L9ECAV7KIM": {"discount_pct": 18, "label": "限时亿补"},
+    "2ZYFJ3GM2N": {"discount_pct": 30, "label": "限时亿补"},
+    "0PUK6V6EV0": {"discount_pct": 12, "label": "亿补价"},
+    "9SIQT8TOJO": {"discount_pct": 22, "label": "亿补价"},
+}
+
 LUA_SCRIPT_NAMES = [
     "earn",
     "redeem",
@@ -43,6 +66,8 @@ LUA_SCRIPT_NAMES = [
     "coupon_cancel",
     "checkin",
     "ratelimit",
+    "flash_claim",
+    "rush_claim",
 ]
 
 REQUEST_LATENCY = Histogram(
@@ -67,6 +92,10 @@ WEEKLY_BONUS = Counter("weekly_bonus_total", "Weekly check-in bonuses awarded.")
 REDIS_POOL_ACTIVE = Gauge(
     "redis_pool_connections_active", "Best-effort active Redis pool connections."
 )
+FLASH_CLAIMED = Counter("flash_sale_claimed_total", "Flash sale coupons claimed.")
+FLASH_SOLD_OUT = Counter("flash_sale_sold_out_total", "Flash sale sold-out rejections.")
+RUSH_CLAIMED = Counter("rush_claimed_total", "On-the-hour coin rush claims.")
+RUSH_SOLD_OUT = Counter("rush_sold_out_total", "Rush sold-out rejections.")
 
 
 def create_app(redis_client=None):
@@ -390,6 +419,199 @@ def create_app(redis_client=None):
             }
         )
 
+    # ------------------------------------------------------------------ #
+    #  百亿补贴                                                            #
+    # ------------------------------------------------------------------ #
+
+    @app.get("/subsidy/check")
+    @timed("subsidy_check")
+    def subsidy_check():
+        product_id = request.args.get("product_id", "").strip()
+        if product_id in SUBSIDY_PRODUCTS:
+            info = SUBSIDY_PRODUCTS[product_id]
+            return jsonify({
+                "product_id": product_id,
+                "has_subsidy": True,
+                "discount_pct": info["discount_pct"],
+                "label": info["label"],
+            })
+        return jsonify({"product_id": product_id, "has_subsidy": False})
+
+    @app.get("/subsidy/products")
+    @timed("subsidy_products")
+    def subsidy_products():
+        return jsonify({
+            "products": [
+                {"product_id": pid, **info}
+                for pid, info in SUBSIDY_PRODUCTS.items()
+            ]
+        })
+
+    # ------------------------------------------------------------------ #
+    #  秒杀优惠券                                                          #
+    # ------------------------------------------------------------------ #
+
+    @app.get("/flash/status")
+    @timed("flash_status")
+    def flash_status():
+        session_id = request.args.get("session_id", "").strip()
+        slot = _current_flash_slot()
+        if not slot:
+            return jsonify({
+                "active": False,
+                "next_at": _next_event_text("flash"),
+                "next_in_sec": _seconds_to_next_flash(),
+            })
+        pool_key = f"flash:{slot}:remaining"
+        remaining_raw = app.redis.get(pool_key)
+        ttl = app.redis.ttl(pool_key)
+        remaining = int(remaining_raw) if remaining_raw is not None else FLASH_POOL_SIZE
+        claimed = False
+        if session_id:
+            claimed = bool(app.redis.get(f"flash:{slot}:claimed:{session_id}"))
+        return jsonify({
+            "active": remaining > 0,
+            "slot": slot,
+            "remaining": remaining,
+            "total": FLASH_POOL_SIZE,
+            "discount_pct": FLASH_DISCOUNT_PCT,
+            "cost_coins": FLASH_COST_COINS,
+            "ends_in_sec": max(ttl, 0),
+            "claimed": claimed,
+        })
+
+    @app.post("/flash/claim")
+    @timed("flash_claim")
+    def flash_claim():
+        payload = request.get_json(silent=True) or {}
+        session_id = str(payload.get("session_id", "")).strip()
+        if not session_id:
+            return jsonify({"error": "session_id is required"}), 400
+        slot = _current_flash_slot()
+        if not slot:
+            return jsonify({
+                "error": "no_active_flash",
+                "next_in_sec": _seconds_to_next_flash(),
+            }), 400
+        pool_key = f"flash:{slot}:remaining"
+        claimed_key = f"flash:{slot}:claimed:{session_id}"
+        # 预热池（如果尚未初始化）
+        if not app.redis.exists(pool_key):
+            app.redis.set(pool_key, FLASH_POOL_SIZE, ex=FLASH_DURATION_SEC)
+        result = _eval_script(
+            app.redis,
+            app.lua["flash_claim"],
+            [pool_key, claimed_key, _coins_key(session_id)],
+            [FLASH_POOL_SIZE, FLASH_COST_COINS, FLASH_DURATION_SEC],
+        )
+        if result[0] == "already_claimed":
+            return jsonify({"error": "already_claimed"}), 409
+        if result[0] == "sold_out":
+            FLASH_SOLD_OUT.inc()
+            return jsonify({"error": "sold_out"}), 410
+        if result[0] == "insufficient_coins":
+            return jsonify({"error": "insufficient_coins", "balance": int(result[1])}), 400
+        remaining = int(result[1])
+        # 生成优惠券
+        for _ in range(3):
+            code = _new_coupon_code()
+            if not app.redis.exists(_coupon_key(code)):
+                break
+        app.redis.hset(_coupon_key(code), mapping={
+            "discount_pct": str(FLASH_DISCOUNT_PCT),
+            "session_id": session_id,
+            "status": "active",
+            "created_at": str(int(time.time())),
+            "source": "flash",
+        })
+        app.redis.expire(_coupon_key(code), COUPON_TTL_SEC)
+        balance = _int_value(app.redis.get(_coins_key(session_id)))
+        FLASH_CLAIMED.inc()
+        COIN_BALANCE.labels(session_id=session_id).set(balance)
+        return jsonify({
+            "coupon_code": code,
+            "discount_pct": FLASH_DISCOUNT_PCT,
+            "cost_coins": FLASH_COST_COINS,
+            "remaining": remaining,
+            "balance": balance,
+        })
+
+    # ------------------------------------------------------------------ #
+    #  整点抢金币                                                          #
+    # ------------------------------------------------------------------ #
+
+    @app.get("/rush/status")
+    @timed("rush_status")
+    def rush_status():
+        session_id = request.args.get("session_id", "").strip()
+        now = datetime.now(timezone.utc)
+        secs_past = now.minute * 60 + now.second
+        is_rush_time = secs_past < RUSH_DURATION_SEC
+        slot = _rush_slot(now)
+        pool_key = f"rush:{slot}:remaining"
+        if is_rush_time:
+            remaining_raw = app.redis.get(pool_key)
+            remaining = int(remaining_raw) if remaining_raw is not None else RUSH_POOL_SIZE
+            ends_in = RUSH_DURATION_SEC - secs_past
+            claimed = bool(app.redis.get(f"rush:{slot}:claimed:{session_id}")) if session_id else False
+        else:
+            remaining = 0
+            ends_in = 0
+            claimed = False
+        next_hour = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+        next_in_sec = int((next_hour - now).total_seconds())
+        return jsonify({
+            "is_rush_time": is_rush_time,
+            "active": is_rush_time and remaining > 0,
+            "slot": slot,
+            "remaining": remaining,
+            "total": RUSH_POOL_SIZE,
+            "coins_per_claim": RUSH_COINS_PER_CLAIM,
+            "ends_in_sec": ends_in,
+            "next_rush_in_sec": next_in_sec if not is_rush_time else 0,
+            "claimed": claimed,
+        })
+
+    @app.post("/rush/claim")
+    @timed("rush_claim")
+    def rush_claim():
+        payload = request.get_json(silent=True) or {}
+        session_id = str(payload.get("session_id", "")).strip()
+        if not session_id:
+            return jsonify({"error": "session_id is required"}), 400
+        now = datetime.now(timezone.utc)
+        secs_past = now.minute * 60 + now.second
+        if secs_past >= RUSH_DURATION_SEC:
+            next_hour = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+            next_in_sec = int((next_hour - now).total_seconds())
+            return jsonify({"error": "not_rush_time", "next_rush_in_sec": next_in_sec}), 400
+        slot = _rush_slot(now)
+        pool_key = f"rush:{slot}:remaining"
+        claimed_key = f"rush:{slot}:claimed:{session_id}"
+        ttl = RUSH_DURATION_SEC - secs_past
+        result = _eval_script(
+            app.redis,
+            app.lua["rush_claim"],
+            [pool_key, claimed_key, _coins_key(session_id)],
+            [RUSH_POOL_SIZE, RUSH_COINS_PER_CLAIM, ttl],
+        )
+        if result[0] == "already_claimed":
+            return jsonify({"error": "already_claimed"}), 409
+        if result[0] == "sold_out":
+            RUSH_SOLD_OUT.inc()
+            return jsonify({"error": "rush_sold_out"}), 410
+        coins_added = int(result[1])
+        balance = int(result[2])
+        remaining = int(result[3])
+        RUSH_CLAIMED.inc()
+        COINS_EARNED.inc(coins_added)
+        COIN_BALANCE.labels(session_id=session_id).set(balance)
+        return jsonify({
+            "coins_added": coins_added,
+            "balance": balance,
+            "remaining": remaining,
+        })
+
     @app.get("/metrics")
     def metrics():
         _observe_redis_pool(app.redis)
@@ -449,6 +671,10 @@ def _rate_limit_endpoint(path, method):
         return "redeem"
     if path.startswith("/coupon/"):
         return "coupon"
+    if path == "/flash/claim":
+        return "flash"
+    if path == "/rush/claim":
+        return "rush"
     return None
 
 
@@ -523,6 +749,53 @@ def _checkin_key(session_id, today):
 
 def _checkin_streak_key(session_id):
     return f"checkin_streak:{session_id}"
+
+
+# ── 秒杀 ──────────────────────────────────────────────────────────────────── #
+
+def _current_flash_slot():
+    """返回当前活跃秒杀场次标识，不在活跃窗口则返回 None。
+    规则：每逢整 2 小时（0,2,4...22时）开始的 FLASH_DURATION_SEC 内有效。"""
+    now = datetime.now(timezone.utc)
+    if now.hour % 2 != 0:
+        return None
+    secs_past = now.minute * 60 + now.second
+    if secs_past >= FLASH_DURATION_SEC:
+        return None
+    return now.strftime("%Y%m%d%H")
+
+
+def _seconds_to_next_flash():
+    """距离下次秒杀开始的秒数。"""
+    now = datetime.now(timezone.utc)
+    next_even_hour = now.replace(minute=0, second=0, microsecond=0)
+    if next_even_hour.hour % 2 != 0 or now.minute * 60 + now.second >= FLASH_DURATION_SEC:
+        hours_ahead = 2 - (next_even_hour.hour % 2) if next_even_hour.hour % 2 != 0 else 2
+        next_even_hour += timedelta(hours=hours_ahead)
+    return max(0, int((next_even_hour - now).total_seconds()))
+
+
+def _next_event_text(kind):
+    if kind == "flash":
+        secs = _seconds_to_next_flash()
+    else:
+        now = datetime.now(timezone.utc)
+        next_hour = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+        secs = max(0, int((next_hour - now).total_seconds()))
+    m, s = divmod(secs, 60)
+    h, m = divmod(m, 60)
+    if h:
+        return f"{h}h{m:02d}m"
+    return f"{m}m{s:02d}s"
+
+
+# ── 整点抢金币 ─────────────────────────────────────────────────────────────── #
+
+def _rush_slot(now=None):
+    """整点场次标识：YYYYMMDDHH。"""
+    if now is None:
+        now = datetime.now(timezone.utc)
+    return now.strftime("%Y%m%d%H")
 
 
 app = create_app()

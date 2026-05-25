@@ -212,6 +212,7 @@ func (fe *frontendServer) productHandler(w http.ResponseWriter, r *http.Request)
 		"cart_size":       cartSize(cart),
 		"packagingInfo":   packagingInfo,
 		"coin_balance":    fe.rewardBalanceOrDefault(r.Context(), sessionID(r)),
+		"subsidy":         fe.getSubsidyInfo(r.Context(), id),
 	})); err != nil {
 		log.Println(err)
 	}
@@ -607,6 +608,67 @@ func (fe *frontendServer) checkInHandler(w http.ResponseWriter, r *http.Request)
 	})
 }
 
+// ────────────────────────────── 秒杀 / 整点抢金币 / 百亿补贴 ──────────────────── //
+
+func (fe *frontendServer) flashStatusHandler(w http.ResponseWriter, r *http.Request) {
+	sid := sessionID(r)
+	result, err := fe.rewardGetRaw(r.Context(), "/flash/status?session_id="+sid)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(result)
+}
+
+func (fe *frontendServer) flashClaimHandler(w http.ResponseWriter, r *http.Request) {
+	sid := sessionID(r)
+	body, _ := json.Marshal(map[string]string{"session_id": sid})
+	result, statusCode, err := fe.rewardPostRaw(r.Context(), "/flash/claim", body)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
+	w.Write(result)
+}
+
+func (fe *frontendServer) rushStatusHandler(w http.ResponseWriter, r *http.Request) {
+	sid := sessionID(r)
+	result, err := fe.rewardGetRaw(r.Context(), "/rush/status?session_id="+sid)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(result)
+}
+
+func (fe *frontendServer) rushClaimHandler(w http.ResponseWriter, r *http.Request) {
+	sid := sessionID(r)
+	body, _ := json.Marshal(map[string]string{"session_id": sid})
+	result, statusCode, err := fe.rewardPostRaw(r.Context(), "/rush/claim", body)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
+	w.Write(result)
+}
+
+func (fe *frontendServer) subsidyCheckHandler(w http.ResponseWriter, r *http.Request) {
+	pid := r.URL.Query().Get("product_id")
+	result, err := fe.rewardGetRaw(r.Context(), "/subsidy/check?product_id="+pid)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(result)
+}
+
 func (fe *frontendServer) trackHandler(w http.ResponseWriter, r *http.Request) {
 	var payload struct {
 		Event string `json:"event"`
@@ -658,6 +720,65 @@ func (fe *frontendServer) getCheckinStatus(ctx context.Context, sessionID string
 		return nil, err
 	}
 	return &out, nil
+}
+
+func (fe *frontendServer) getSubsidyInfo(ctx context.Context, productID string) map[string]interface{} {
+	b, err := fe.rewardGetRaw(ctx, "/subsidy/check?product_id="+productID)
+	if err != nil {
+		return nil
+	}
+	var result struct {
+		HasSubsidy  bool   `json:"has_subsidy"`
+		DiscountPct int    `json:"discount_pct"`
+		Label       string `json:"label"`
+	}
+	if err := json.Unmarshal(b, &result); err != nil || !result.HasSubsidy {
+		return nil
+	}
+	return map[string]interface{}{
+		"has_subsidy":  result.HasSubsidy,
+		"discount_pct": result.DiscountPct,
+		"label":        result.Label,
+	}
+}
+
+func (fe *frontendServer) rewardGetRaw(ctx context.Context, path string) ([]byte, error) {
+	reqCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, "http://"+fe.rewardServiceAddr+path, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	return b, nil
+}
+
+func (fe *frontendServer) rewardPostRaw(ctx context.Context, path string, body []byte) ([]byte, int, error) {
+	reqCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, "http://"+fe.rewardServiceAddr+path, bytes.NewReader(body))
+	if err != nil {
+		return nil, 0, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer resp.Body.Close()
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, resp.StatusCode, err
+	}
+	return b, resp.StatusCode, nil
 }
 
 func (fe *frontendServer) rewardGet(ctx context.Context, path string, out interface{}) error {

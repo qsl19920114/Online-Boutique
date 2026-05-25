@@ -358,3 +358,239 @@
 </script>
 {{ end }}
 {{ end }}
+
+{{/* ======================== 顶部通知栏广告 ======================== */}}
+{{ define "ad_top_bar" }}
+<div id="reward-top-bar" class="reward-top-bar" style="display:none">
+  <span class="reward-top-bar-icon">🔥</span>
+  <span id="reward-top-bar-text"></span>
+  <button class="reward-top-bar-btn" id="reward-top-bar-cta" style="display:none">立即领取</button>
+  <button class="reward-top-bar-close" onclick="document.getElementById('reward-top-bar').style.display='none'" aria-label="关闭">✕</button>
+</div>
+<script>
+(function(){
+  var bar = document.getElementById('reward-top-bar');
+  var textEl = document.getElementById('reward-top-bar-text');
+  var ctaBtn = document.getElementById('reward-top-bar-cta');
+  var dismissed = sessionStorage.getItem('top_bar_dismissed');
+  if (dismissed) return;
+
+  function formatCountdown(sec) {
+    var m = Math.floor(sec / 60), s = sec % 60;
+    return m + 'min ' + (s < 10 ? '0' : '') + s + 's';
+  }
+
+  function checkFlash() {
+    fetch('/ads/flash/status').then(function(r){ return r.json(); }).then(function(d){
+      if (d.active && !d.claimed) {
+        textEl.textContent = '⚡ 秒杀进行中！' + d.discount_pct + '折优惠券 剩余' + d.remaining + '张';
+        ctaBtn.style.display = '';
+        ctaBtn.onclick = function(){ claimFlash(); };
+        bar.style.display = '';
+      } else if (!d.active && d.next_in_sec > 0) {
+        textEl.textContent = '下次秒杀倒计时：' + formatCountdown(d.next_in_sec);
+        ctaBtn.style.display = 'none';
+        bar.style.display = '';
+        var left = d.next_in_sec;
+        var timer = setInterval(function(){
+          left--;
+          if (left <= 0) { clearInterval(timer); checkFlash(); return; }
+          textEl.textContent = '下次秒杀倒计时：' + formatCountdown(left);
+        }, 1000);
+      }
+    }).catch(function(){});
+  }
+
+  function claimFlash() {
+    ctaBtn.disabled = true;
+    fetch('/ads/flash/claim', { method: 'POST' }).then(function(r){ return r.json(); }).then(function(d){
+      if (d.coupon_code) {
+        textEl.textContent = '🎉 领取成功！优惠券：' + d.coupon_code + '（' + d.discount_pct + '折）';
+        ctaBtn.style.display = 'none';
+        var closeTimer = setTimeout(function(){ bar.style.display = 'none'; }, 5000);
+      } else {
+        textEl.textContent = d.error === 'sold_out' ? '已售罄，下次早点来~' : (d.error || '领取失败');
+        ctaBtn.style.display = 'none';
+      }
+    }).catch(function(){ ctaBtn.disabled = false; });
+  }
+
+  checkFlash();
+  document.getElementById('reward-top-bar-close') && document.getElementById('reward-top-bar-close').addEventListener('click', function(){
+    sessionStorage.setItem('top_bar_dismissed', '1');
+  });
+})();
+</script>
+{{ end }}
+
+{{/* ======================== 侧边栏广告 ======================== */}}
+{{ define "ad_sidebar" }}
+<div id="reward-sidebar" class="reward-sidebar">
+  <div class="reward-sidebar-header">
+    <span>🎁 活动专区</span>
+    <button class="reward-sidebar-toggle" onclick="toggleSidebar()" aria-label="收起">‹</button>
+  </div>
+  <div class="reward-sidebar-body" id="reward-sidebar-body">
+    <div class="reward-sidebar-section">
+      <div class="reward-sidebar-title">⚡ 秒杀活动</div>
+      <div id="sidebar-flash-info" class="reward-sidebar-info">加载中...</div>
+      <button id="sidebar-flash-btn" class="reward-sidebar-action-btn" style="display:none">马上抢</button>
+    </div>
+    <div class="reward-sidebar-divider"></div>
+    <div class="reward-sidebar-section">
+      <div class="reward-sidebar-title">🕐 整点抢金币</div>
+      <div id="sidebar-rush-info" class="reward-sidebar-info">加载中...</div>
+      <button id="sidebar-rush-btn" class="reward-sidebar-action-btn" style="display:none">抢金币</button>
+    </div>
+    <div class="reward-sidebar-divider"></div>
+    <div class="reward-sidebar-section">
+      <div class="reward-sidebar-title">💰 百亿补贴</div>
+      <div class="reward-sidebar-info">精选商品直降，每日更新</div>
+      <a href="/" class="reward-sidebar-action-btn" style="text-decoration:none;text-align:center">去逛逛</a>
+    </div>
+  </div>
+</div>
+<script>
+(function(){
+  var collapsed = false;
+  window.toggleSidebar = function(){
+    collapsed = !collapsed;
+    var body = document.getElementById('reward-sidebar-body');
+    var btn = document.querySelector('.reward-sidebar-toggle');
+    body.style.display = collapsed ? 'none' : '';
+    btn.textContent = collapsed ? '›' : '‹';
+  };
+
+  function formatSec(sec) {
+    if (sec >= 3600) return Math.floor(sec/3600) + 'h' + Math.floor((sec%3600)/60) + 'm';
+    var m = Math.floor(sec/60), s = sec%60;
+    return m + ':' + (s<10?'0':'') + s;
+  }
+
+  // 秒杀状态
+  fetch('/ads/flash/status').then(function(r){ return r.json(); }).then(function(d){
+    var info = document.getElementById('sidebar-flash-info');
+    var btn = document.getElementById('sidebar-flash-btn');
+    if (d.active && !d.claimed) {
+      info.textContent = d.discount_pct + '折券 剩余' + d.remaining + '张 ' + formatSec(d.ends_in_sec) + '后结束';
+      btn.style.display = '';
+      btn.onclick = function(){
+        btn.disabled = true;
+        fetch('/ads/flash/claim',{method:'POST'}).then(function(r){return r.json();}).then(function(rd){
+          if(rd.coupon_code){ info.textContent='券码：'+rd.coupon_code; btn.style.display='none'; }
+          else { info.textContent = rd.error||'失败'; }
+        });
+      };
+    } else if (d.claimed) {
+      info.textContent = '今场已领取 ✓';
+    } else {
+      info.textContent = d.next_in_sec > 0 ? '下场：' + formatSec(d.next_in_sec) + '后' : '暂无活动';
+    }
+  }).catch(function(){ document.getElementById('sidebar-flash-info').textContent = '暂无活动'; });
+
+  // 整点抢金币状态
+  fetch('/ads/rush/status').then(function(r){ return r.json(); }).then(function(d){
+    var info = document.getElementById('sidebar-rush-info');
+    var btn = document.getElementById('sidebar-rush-btn');
+    if (d.is_rush_time && d.active && !d.claimed) {
+      info.textContent = '正在进行！+' + d.coins_per_claim + '金币 剩余' + d.remaining + '份';
+      btn.style.display = '';
+      btn.onclick = function(){
+        btn.disabled = true;
+        fetch('/ads/rush/claim',{method:'POST'}).then(function(r){return r.json();}).then(function(rd){
+          if(rd.coins_added){ info.textContent='获得+'+rd.coins_added+'金币！余额：'+rd.balance; btn.style.display='none'; }
+          else { info.textContent = rd.error||'失败'; }
+        });
+      };
+    } else if (d.claimed) {
+      info.textContent = '本场已领取 ✓';
+    } else {
+      var t = d.next_rush_in_sec || 0;
+      info.textContent = t > 0 ? formatSec(t) + '后整点开抢' : '暂无活动';
+      if (t > 0) {
+        var left = t;
+        var timer = setInterval(function(){
+          left--;
+          if(left<=0){ clearInterval(timer); location.reload(); return; }
+          info.textContent = formatSec(left) + '后整点开抢';
+        }, 1000);
+      }
+    }
+  }).catch(function(){ document.getElementById('sidebar-rush-info').textContent = '加载失败'; });
+})();
+</script>
+{{ end }}
+
+{{/* ======================== 百亿补贴徽章 ======================== */}}
+{{ define "ad_subsidy_badge" }}
+{{ if .subsidy }}
+<div class="subsidy-badge-wrap">
+  <span class="subsidy-badge">
+    <span class="subsidy-badge-label">{{ .subsidy.label }}</span>
+    <span class="subsidy-badge-discount">{{ .subsidy.discount_pct }}% OFF</span>
+  </span>
+</div>
+{{ end }}
+{{ end }}
+
+{{/* ======================== 整点抢金币浮层 ======================== */}}
+{{ define "ad_rush_widget" }}
+<div id="rush-widget" class="rush-widget" style="display:none">
+  <div class="rush-widget-icon">🕐</div>
+  <div class="rush-widget-text">整点抢金币</div>
+  <div id="rush-widget-countdown" class="rush-widget-countdown"></div>
+  <button id="rush-widget-btn" class="rush-widget-btn" style="display:none">抢！</button>
+</div>
+<script>
+(function(){
+  var widget = document.getElementById('rush-widget');
+  var countdownEl = document.getElementById('rush-widget-countdown');
+  var btn = document.getElementById('rush-widget-btn');
+
+  function formatSec(sec){
+    var m=Math.floor(sec/60),s=sec%60;
+    return m+':'+(s<10?'0':'')+s;
+  }
+
+  fetch('/ads/rush/status').then(function(r){return r.json();}).then(function(d){
+    widget.style.display='';
+    if(d.is_rush_time && d.active && !d.claimed){
+      countdownEl.textContent='剩余'+formatSec(d.ends_in_sec);
+      btn.style.display='';
+      btn.textContent='+'+d.coins_per_claim+'金币';
+      btn.onclick=function(){
+        btn.disabled=true;
+        fetch('/ads/rush/claim',{method:'POST'}).then(function(r){return r.json();}).then(function(rd){
+          if(rd.coins_added){
+            countdownEl.textContent='已获得+'+rd.coins_added+'金币！';
+            btn.style.display='none';
+          } else {
+            countdownEl.textContent=rd.error||'失败';
+          }
+        });
+      };
+      var left=d.ends_in_sec;
+      var t=setInterval(function(){
+        left--;
+        if(left<=0){clearInterval(t);btn.style.display='none';countdownEl.textContent='已结束';}
+        else countdownEl.textContent='剩余'+formatSec(left);
+      },1000);
+    } else if(d.claimed){
+      countdownEl.textContent='已领取 ✓';
+      btn.style.display='none';
+    } else {
+      var left=d.next_rush_in_sec||0;
+      btn.style.display='none';
+      countdownEl.textContent=left>0?formatSec(left)+'后开抢':'整点开抢';
+      if(left>0){
+        var t=setInterval(function(){
+          left--;
+          if(left<=0){clearInterval(t);location.reload();}
+          else countdownEl.textContent=formatSec(left)+'后开抢';
+        },1000);
+      }
+    }
+  }).catch(function(){ widget.style.display='none'; });
+})();
+</script>
+{{ end }}
