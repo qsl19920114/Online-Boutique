@@ -82,6 +82,13 @@
                     </div>
                     {{ end }}
 
+                    {{ if ge $.coin_balance 0 }}
+                    <a href="{{ $.baseUrl }}/rewards" class="cart-link reward-link" title="Rewards">
+                        <span class="reward-coin-icon">¢</span>
+                        <span class="reward-balance">{{ $.coin_balance }}</span>
+                    </a>
+                    {{ end }}
+
                     {{ if $.assistant_enabled }}
                     <a href="{{ $.baseUrl }}/assistant" class="cart-link">
                       <img src="{{ $.baseUrl }}/static/icons/Hipster_WandIcon.svg" style="width: 22px; height: 22px;" alt="Assistant icon" class="logo" title="Assistant" />

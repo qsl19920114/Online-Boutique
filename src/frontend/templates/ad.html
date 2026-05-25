@@ -16,11 +16,96 @@
 
 {{ define "text_ad" }}
 <div class="container py-3 px-lg-5 py-lg-5">
-    <div role="alert">
+    <div role="alert" class="reward-ad-panel">
         <strong>Ad</strong>
         <a href="{{$.baseUrl}}{{.ad.RedirectUrl}}" rel="nofollow noopener noreferrer" target="_blank">
             {{.ad.Text}}
         </a>
+        <button class="cymbal-button-primary reward-ad-button" type="button" data-ad-id="{{.ad.Text}}">
+            Watch ad, earn coins
+        </button>
     </div>
 </div>
+<div class="reward-modal-backdrop" id="reward-modal-backdrop" hidden>
+    <div class="reward-modal" role="dialog" aria-modal="true">
+        <div class="reward-modal-title" id="reward-modal-title">Watch ad</div>
+        <div class="reward-progress">
+            <div class="reward-progress-bar" id="reward-progress-bar"></div>
+        </div>
+        <p id="reward-modal-copy">Keep watching to unlock coins.</p>
+        <div class="reward-modal-actions">
+            <button class="cymbal-button-secondary" id="reward-exit-button" type="button">Claim now</button>
+            <button class="cymbal-button-primary" id="reward-continue-button" type="button">Continue</button>
+        </div>
+    </div>
+</div>
+<script>
+(function () {
+    const button = document.querySelector('.reward-ad-button');
+    if (!button) return;
+
+    const backdrop = document.getElementById('reward-modal-backdrop');
+    const title = document.getElementById('reward-modal-title');
+    const copy = document.getElementById('reward-modal-copy');
+    const progress = document.getElementById('reward-progress-bar');
+    const exitButton = document.getElementById('reward-exit-button');
+    const continueButton = document.getElementById('reward-continue-button');
+    let config = null;
+    let elapsed = 0;
+    let timer = null;
+    let checkpoint = null;
+
+    button.addEventListener('click', async function () {
+        const res = await fetch('{{$.baseUrl}}/ads/stage-config');
+        config = await res.json();
+        elapsed = 0;
+        checkpoint = null;
+        backdrop.hidden = false;
+        tick();
+        timer = window.setInterval(tick, 1000);
+    });
+
+    continueButton.addEventListener('click', function () {
+        checkpoint = null;
+        timer = window.setInterval(tick, 1000);
+    });
+
+    exitButton.addEventListener('click', function () {
+        if (checkpoint) submitEarn(checkpoint.stage);
+    });
+
+    async function tick() {
+        elapsed += 1;
+        const total = config.stages[config.stages.length - 1].trigger_sec;
+        progress.style.width = Math.min(100, elapsed / total * 100) + '%';
+        checkpoint = config.stages.find(function (stage) { return stage.trigger_sec === elapsed; });
+        if (!checkpoint) return;
+        window.clearInterval(timer);
+        if (checkpoint.stage === config.stages[config.stages.length - 1].stage) {
+            await submitEarn(checkpoint.stage);
+            return;
+        }
+        const maxCoins = config.stages[config.stages.length - 1].coins;
+        title.textContent = 'Unlocked ' + checkpoint.coins + ' coins';
+        copy.textContent = 'Claim now, or keep watching to reach ' + maxCoins + ' coins.';
+        exitButton.textContent = 'Claim ' + checkpoint.coins + ' coins';
+        continueButton.textContent = 'Continue';
+    }
+
+    async function submitEarn(stage) {
+        const res = await fetch('{{$.baseUrl}}/ads/watch', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ad_id: button.dataset.adId || 'default-ad', stage: stage})
+        });
+        const data = await res.json();
+        if (data.ok && typeof data.balance !== 'undefined') {
+            const balance = document.querySelector('.reward-balance');
+            if (balance) balance.textContent = data.balance;
+        }
+        backdrop.hidden = true;
+        window.clearInterval(timer);
+    }
+})();
+</script>
 {{ end }}

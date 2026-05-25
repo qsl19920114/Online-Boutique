@@ -53,6 +53,24 @@
                     {{.order.ShippingTrackingId}}
                 </div>
             </div>
+            {{ if $.coupon_code }}
+            <div class="row border-bottom-solid padding-y-24">
+                <div class="col-6 pl-md-0">
+                    Coupon
+                </div>
+                <div class="col-6 pr-md-0 text-right">
+                    {{ $.coupon_code }}
+                </div>
+            </div>
+            <div class="row border-bottom-solid padding-y-24">
+                <div class="col-6 pl-md-0">
+                    Discount
+                </div>
+                <div class="col-6 pr-md-0 text-right">
+                    {{ renderMoney $.discount_amount }}
+                </div>
+            </div>
+            {{ end }}
             <div class="row padding-y-24">
                 <div class="col-6 pl-md-0">
                     Total Paid

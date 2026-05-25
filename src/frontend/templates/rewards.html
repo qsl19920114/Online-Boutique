@@ -1,0 +1,39 @@
+{{ define "rewards" }}
+{{ template "header" . }}
+<main role="main" class="rewards-page">
+    <section class="container rewards-section">
+        <div class="rewards-heading">
+            <h3>Rewards Center</h3>
+            <p>Balance: <strong>{{ $.coin_balance }}</strong> coins</p>
+        </div>
+
+        {{ if $.redeem_error }}
+        <div class="reward-alert">{{ $.redeem_error }}</div>
+        {{ end }}
+
+        {{ if $.redeemed_coupon }}
+        <div class="reward-coupon-result">
+            <div>Coupon code</div>
+            <strong>{{ $.redeemed_coupon.CouponCode }}</strong>
+            <p>{{ $.redeemed_coupon.DiscountPct }} percent payable at checkout.</p>
+        </div>
+        {{ end }}
+
+        <div class="reward-redemption-grid">
+            <form method="POST" action="{{ $.baseUrl }}/rewards/redeem" class="reward-redemption-card">
+                <input type="hidden" name="cost" value="50">
+                <h4>90 percent payable coupon</h4>
+                <p>Costs 50 coins.</p>
+                <button class="cymbal-button-primary" type="submit">Redeem</button>
+            </form>
+            <form method="POST" action="{{ $.baseUrl }}/rewards/redeem" class="reward-redemption-card">
+                <input type="hidden" name="cost" value="100">
+                <h4>80 percent payable coupon</h4>
+                <p>Costs 100 coins.</p>
+                <button class="cymbal-button-primary" type="submit">Redeem</button>
+            </form>
+        </div>
+    </section>
+</main>
+{{ template "footer" . }}
+{{ end }}
