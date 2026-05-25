@@ -17,7 +17,7 @@ WORKDIR /src
 
 # restore dependencies
 COPY go.mod go.sum ./
-RUN go mod download
+RUN GOPROXY=https://goproxy.cn,direct go mod download
 COPY . .
 
 # Skaffold passes in debug-oriented compiler flags
