@@ -28,6 +28,9 @@ spec:
         app: frontend
       annotations:
         sidecar.istio.io/rewriteAppHTTPProbers: "true"
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
     spec:
       serviceAccountName: frontend
       securityContext:
@@ -80,6 +83,8 @@ spec:
             value: "checkoutservice:5050"
           - name: AD_SERVICE_ADDR
             value: "adservice:9555"
+          - name: REWARD_SERVICE_ADDR
+            value: "rewardservice:80"
           - name: SHOPPING_ASSISTANT_SERVICE_ADDR
             value: "shoppingassistantservice:80"
           # # ENV_PLATFORM: One of: local, gcp, aws, azure, onprem, alibaba

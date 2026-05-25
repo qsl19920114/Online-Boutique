@@ -26,5 +26,6 @@ resources:
 - network-policy-paymentservice.yaml
 - network-policy-productcatalogservice.yaml
 - network-policy-recommendationservice.yaml
+- network-policy-rewardservice.yaml
 - network-policy-redis.yaml
 - network-policy-shippingservice.yaml

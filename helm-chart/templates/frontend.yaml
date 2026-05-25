@@ -44,6 +44,9 @@ spec:
         app: {{ .Values.frontend.name }}
       annotations:
         sidecar.istio.io/rewriteAppHTTPProbers: "true"
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
     spec:
       {{- if .Values.serviceAccounts.create }}
       serviceAccountName: {{ .Values.frontend.name }}
@@ -106,6 +109,8 @@ spec:
             value: "{{ .Values.checkoutService.name }}:5050"
           - name: AD_SERVICE_ADDR
             value: "{{ .Values.adService.name }}:9555"
+          - name: REWARD_SERVICE_ADDR
+            value: "{{ .Values.rewardService.name }}:80"
           - name: SHOPPING_ASSISTANT_SERVICE_ADDR
             value: "{{ .Values.shoppingAssistantService.name }}:80"
           - name: ENV_PLATFORM
@@ -221,6 +226,7 @@ spec:
     - ./{{ .Values.currencyService.name }}.{{ .Release.Namespace }}.svc.cluster.local
     - ./{{ .Values.productCatalogService.name }}.{{ .Release.Namespace }}.svc.cluster.local
     - ./{{ .Values.recommendationService.name }}.{{ .Release.Namespace }}.svc.cluster.local
+    - ./{{ .Values.rewardService.name }}.{{ .Release.Namespace }}.svc.cluster.local
     - ./{{ .Values.shippingService.name }}.{{ .Release.Namespace }}.svc.cluster.local
     {{- if .Values.opentelemetryCollector.create }}
     - ./{{ .Values.opentelemetryCollector.name }}.{{ .Release.Namespace }}.svc.cluster.local

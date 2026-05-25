@@ -42,6 +42,10 @@ spec:
     metadata:
       labels:
         app: {{ .Values.checkoutService.name }}
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        prometheus.io/path: "/metrics"
     spec:
       {{- if .Values.serviceAccounts.create }}
       serviceAccountName: {{ .Values.checkoutService.name }}
@@ -71,6 +75,7 @@ spec:
         image: {{ .Values.images.repository }}/{{ .Values.checkoutService.name }}:{{ .Values.images.tag | default .Chart.AppVersion }}
         ports:
         - containerPort: 5050
+        - containerPort: 9090
         readinessProbe:
           grpc:
             port: 5050
@@ -80,6 +85,8 @@ spec:
         env:
         - name: PORT
           value: "5050"
+        - name: METRICS_PORT
+          value: "9090"
         - name: PRODUCT_CATALOG_SERVICE_ADDR
           value: "{{ .Values.productCatalogService.name }}:3550"
         - name: SHIPPING_SERVICE_ADDR
@@ -92,6 +99,8 @@ spec:
           value: "{{ .Values.currencyService.name }}:7000"
         - name: CART_SERVICE_ADDR
           value: "{{ .Values.cartService.name }}:7070"
+        - name: REWARD_SERVICE_ADDR
+          value: "{{ .Values.rewardService.name }}:80"
         {{- if .Values.opentelemetryCollector.create }}
         - name: COLLECTOR_SERVICE_ADDR
           value: "{{ .Values.opentelemetryCollector.name }}:4317"
@@ -168,6 +177,7 @@ spec:
     - ./{{ .Values.emailService.name }}.{{ .Release.Namespace }}.svc.cluster.local
     - ./{{ .Values.paymentService.name }}.{{ .Release.Namespace }}.svc.cluster.local
     - ./{{ .Values.productCatalogService.name }}.{{ .Release.Namespace }}.svc.cluster.local
+    - ./{{ .Values.rewardService.name }}.{{ .Release.Namespace }}.svc.cluster.local
     - ./{{ .Values.shippingService.name }}.{{ .Release.Namespace }}.svc.cluster.local
     {{- if .Values.opentelemetryCollector.create }}
     - ./{{ .Values.opentelemetryCollector.name }}.{{ .Release.Namespace }}.svc.cluster.local

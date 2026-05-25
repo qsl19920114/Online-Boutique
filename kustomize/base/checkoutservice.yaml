@@ -26,6 +26,10 @@ spec:
     metadata:
       labels:
         app: checkoutservice
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        prometheus.io/path: "/metrics"
     spec:
       serviceAccountName: checkoutservice
       securityContext:
@@ -45,6 +49,7 @@ spec:
           image: us-central1-docker.pkg.dev/google-samples/microservices-demo/checkoutservice:v0.10.2
           ports:
           - containerPort: 5050
+          - containerPort: 9090
           readinessProbe:
             grpc:
               port: 5050
@@ -54,6 +59,8 @@ spec:
           env:
           - name: PORT
             value: "5050"
+          - name: METRICS_PORT
+            value: "9090"
           - name: PRODUCT_CATALOG_SERVICE_ADDR
             value: "productcatalogservice:3550"
           - name: SHIPPING_SERVICE_ADDR
@@ -66,6 +73,8 @@ spec:
             value: "currencyservice:7000"
           - name: CART_SERVICE_ADDR
             value: "cartservice:7070"
+          - name: REWARD_SERVICE_ADDR
+            value: "rewardservice:80"
           resources:
             requests:
               cpu: 100m

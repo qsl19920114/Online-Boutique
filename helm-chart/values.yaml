@@ -186,6 +186,17 @@ recommendationService:
       cpu: 200m
       memory: 450Mi
 
+rewardService:
+  create: true
+  name: rewardservice
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
 shippingService:
   create: true
   name: shippingservice
