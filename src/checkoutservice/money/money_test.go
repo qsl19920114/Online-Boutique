@@ -243,3 +243,63 @@ func TestSum(t *testing.T) {
 		})
 	}
 }
+
+func TestApplyPayablePercent(t *testing.T) {
+	type args struct {
+		total      pb.Money
+		payablePct int32
+	}
+	tests := []struct {
+		name         string
+		args         args
+		wantDiscount pb.Money
+		wantDue      pb.Money
+		wantErr      error
+	}{
+		{
+			name:         "90 percent payable discounts 10 percent",
+			args:         args{total: mmc(20, 0, "USD"), payablePct: 90},
+			wantDiscount: mmc(2, 0, "USD"),
+			wantDue:      mmc(18, 0, "USD"),
+		},
+		{
+			name:         "nanos are discounted without floating point",
+			args:         args{total: mmc(0, 990000000, "USD"), payablePct: 90},
+			wantDiscount: mmc(0, 99000000, "USD"),
+			wantDue:      mmc(0, 891000000, "USD"),
+		},
+		{
+			name:         "zero payable leaves due at zero",
+			args:         args{total: mmc(7, 250000000, "USD"), payablePct: 0},
+			wantDiscount: mmc(7, 250000000, "USD"),
+			wantDue:      mmc(0, 0, "USD"),
+		},
+		{
+			name:    "rejects percent over one hundred",
+			args:    args{total: mmc(7, 0, "USD"), payablePct: 101},
+			wantErr: ErrInvalidPercentage,
+		},
+		{
+			name:    "rejects negative total",
+			args:    args{total: mmc(-1, 0, "USD"), payablePct: 90},
+			wantErr: ErrInvalidValue,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotDiscount, gotDue, err := ApplyPayablePercent(tt.args.total, tt.args.payablePct)
+			if err != tt.wantErr {
+				t.Fatalf("ApplyPayablePercent(%v, %d): expected err=%v got=%v", tt.args.total, tt.args.payablePct, tt.wantErr, err)
+			}
+			if tt.wantErr != nil {
+				return
+			}
+			if !AreEquals(gotDiscount, tt.wantDiscount) {
+				t.Errorf("discount = %v, want %v", gotDiscount, tt.wantDiscount)
+			}
+			if !AreEquals(gotDue, tt.wantDue) {
+				t.Errorf("due = %v, want %v", gotDue, tt.wantDue)
+			}
+		})
+	}
+}

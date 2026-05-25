@@ -15,10 +15,15 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
 	"os"
+	"sync/atomic"
 	"time"
 
 	"cloud.google.com/go/profiler"
@@ -46,6 +51,13 @@ const (
 )
 
 var log *logrus.Logger
+
+var (
+	checkoutSuccessTotal        uint64
+	checkoutFailureTotal        uint64
+	checkoutCouponValidateTotal uint64
+	checkoutCouponCommitTotal   uint64
+)
 
 func init() {
 	log = logrus.New()
@@ -81,6 +93,8 @@ type checkoutService struct {
 
 	paymentSvcAddr string
 	paymentSvcConn *grpc.ClientConn
+
+	rewardServiceAddr string
 }
 
 func main() {
@@ -112,6 +126,7 @@ func main() {
 	mustMapEnv(&svc.currencySvcAddr, "CURRENCY_SERVICE_ADDR")
 	mustMapEnv(&svc.emailSvcAddr, "EMAIL_SERVICE_ADDR")
 	mustMapEnv(&svc.paymentSvcAddr, "PAYMENT_SERVICE_ADDR")
+	mustMapEnv(&svc.rewardServiceAddr, "REWARD_SERVICE_ADDR")
 
 	mustConnGRPC(ctx, &svc.shippingSvcConn, svc.shippingSvcAddr)
 	mustConnGRPC(ctx, &svc.productCatalogSvcConn, svc.productCatalogSvcAddr)
@@ -121,6 +136,7 @@ func main() {
 	mustConnGRPC(ctx, &svc.paymentSvcConn, svc.paymentSvcAddr)
 
 	log.Infof("service config: %+v", svc)
+	go startMetricsServer()
 
 	lis, err := net.Listen("tcp", fmt.Sprintf(":%s", port))
 	if err != nil {
@@ -228,6 +244,12 @@ func (cs *checkoutService) Watch(req *healthpb.HealthCheckRequest, ws healthpb.H
 
 func (cs *checkoutService) PlaceOrder(ctx context.Context, req *pb.PlaceOrderRequest) (*pb.PlaceOrderResponse, error) {
 	log.Infof("[PlaceOrder] user_id=%q user_currency=%q", req.UserId, req.UserCurrency)
+	success := false
+	defer func() {
+		if !success {
+			atomic.AddUint64(&checkoutFailureTotal, 1)
+		}
+	}()
 
 	orderID, err := uuid.NewUUID()
 	if err != nil {
@@ -248,15 +270,44 @@ func (cs *checkoutService) PlaceOrder(ctx context.Context, req *pb.PlaceOrderReq
 		total = money.Must(money.Sum(total, multPrice))
 	}
 
-	txID, err := cs.chargeCard(ctx, &total, req.CreditCard)
+	totalPaid := total
+	discountAmount := pb.Money{CurrencyCode: req.UserCurrency}
+	couponCode := req.GetCouponCode()
+	couponLocked := false
+	if couponCode != "" {
+		discountPct, err := cs.validateCoupon(ctx, req.GetUserId(), couponCode)
+		if err != nil {
+			return nil, status.Errorf(codes.InvalidArgument, "coupon validation failed: %+v", err)
+		}
+		couponLocked = true
+		discountAmount, totalPaid, err = money.ApplyPayablePercent(total, discountPct)
+		if err != nil {
+			_ = cs.cancelCoupon(ctx, couponCode)
+			return nil, status.Errorf(codes.InvalidArgument, "coupon discount failed: %+v", err)
+		}
+	}
+
+	txID, err := cs.chargeCard(ctx, &totalPaid, req.CreditCard)
 	if err != nil {
+		if couponLocked {
+			_ = cs.cancelCoupon(ctx, couponCode)
+		}
 		return nil, status.Errorf(codes.Internal, "failed to charge card: %+v", err)
 	}
 	log.Infof("payment went through (transaction_id: %s)", txID)
 
 	shippingTrackingID, err := cs.shipOrder(ctx, req.Address, prep.cartItems)
 	if err != nil {
+		if couponLocked {
+			_ = cs.cancelCoupon(ctx, couponCode)
+		}
 		return nil, status.Errorf(codes.Unavailable, "shipping error: %+v", err)
+	}
+
+	if couponLocked {
+		if err := cs.commitCoupon(ctx, couponCode); err != nil {
+			return nil, status.Errorf(codes.Internal, "coupon commit failed: %+v", err)
+		}
 	}
 
 	_ = cs.emptyUserCart(ctx, req.UserId)
@@ -267,6 +318,9 @@ func (cs *checkoutService) PlaceOrder(ctx context.Context, req *pb.PlaceOrderReq
 		ShippingCost:       prep.shippingCostLocalized,
 		ShippingAddress:    req.Address,
 		Items:              prep.orderItems,
+		CouponCode:         couponCode,
+		DiscountAmount:     &discountAmount,
+		TotalPaid:          &totalPaid,
 	}
 
 	if err := cs.sendOrderConfirmation(ctx, req.Email, orderResult); err != nil {
@@ -275,6 +329,8 @@ func (cs *checkoutService) PlaceOrder(ctx context.Context, req *pb.PlaceOrderReq
 		log.Infof("order confirmation email sent to %q", req.Email)
 	}
 	resp := &pb.PlaceOrderResponse{Order: orderResult}
+	success = true
+	atomic.AddUint64(&checkoutSuccessTotal, 1)
 	return resp, nil
 }
 
@@ -390,4 +446,87 @@ func (cs *checkoutService) shipOrder(ctx context.Context, address *pb.Address, i
 		return "", fmt.Errorf("shipment failed: %+v", err)
 	}
 	return resp.GetTrackingId(), nil
+}
+
+type couponValidateResponse struct {
+	Valid       bool  `json:"valid"`
+	DiscountPct int32 `json:"discount_pct"`
+}
+
+func (cs *checkoutService) validateCoupon(ctx context.Context, sessionID, couponCode string) (int32, error) {
+	atomic.AddUint64(&checkoutCouponValidateTotal, 1)
+	var out couponValidateResponse
+	if err := cs.postReward(ctx, "/coupon/validate", map[string]string{
+		"session_id":  sessionID,
+		"coupon_code": couponCode,
+	}, &out); err != nil {
+		return 0, err
+	}
+	if !out.Valid {
+		return 0, fmt.Errorf("coupon was not valid")
+	}
+	return out.DiscountPct, nil
+}
+
+func (cs *checkoutService) commitCoupon(ctx context.Context, couponCode string) error {
+	atomic.AddUint64(&checkoutCouponCommitTotal, 1)
+	return cs.postReward(ctx, "/coupon/commit", map[string]string{"coupon_code": couponCode}, nil)
+}
+
+func (cs *checkoutService) cancelCoupon(ctx context.Context, couponCode string) error {
+	return cs.postReward(ctx, "/coupon/cancel", map[string]string{"coupon_code": couponCode}, nil)
+}
+
+func (cs *checkoutService) postReward(ctx context.Context, path string, payload any, out any) error {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	reqCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, "http://"+cs.rewardServiceAddr+path, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("rewardservice %s returned %d: %s", path, resp.StatusCode, string(respBody))
+	}
+	if out == nil {
+		return nil
+	}
+	return json.Unmarshal(respBody, out)
+}
+
+func startMetricsServer() {
+	port := os.Getenv("METRICS_PORT")
+	if port == "" {
+		port = "9090"
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/metrics", checkoutMetricsHandler)
+	if err := http.ListenAndServe(":"+port, mux); err != nil {
+		log.Warnf("checkout metrics server stopped: %+v", err)
+	}
+}
+
+func checkoutMetricsHandler(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
+	fmt.Fprintln(w, "# TYPE checkout_success_total counter")
+	fmt.Fprintf(w, "checkout_success_total %d\n", atomic.LoadUint64(&checkoutSuccessTotal))
+	fmt.Fprintln(w, "# TYPE checkout_failure_total counter")
+	fmt.Fprintf(w, "checkout_failure_total %d\n", atomic.LoadUint64(&checkoutFailureTotal))
+	fmt.Fprintln(w, "# TYPE checkout_coupon_validate_total counter")
+	fmt.Fprintf(w, "checkout_coupon_validate_total %d\n", atomic.LoadUint64(&checkoutCouponValidateTotal))
+	fmt.Fprintln(w, "# TYPE checkout_coupon_commit_total counter")
+	fmt.Fprintf(w, "checkout_coupon_commit_total %d\n", atomic.LoadUint64(&checkoutCouponCommitTotal))
 }

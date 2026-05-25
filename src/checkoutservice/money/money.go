@@ -29,6 +29,7 @@ const (
 var (
 	ErrInvalidValue        = errors.New("one of the specified money values is invalid")
 	ErrMismatchingCurrency = errors.New("mismatching currency codes")
+	ErrInvalidPercentage   = errors.New("percentage must be between 0 and 100")
 )
 
 // IsValid checks if specified value has a valid units/nanos signs and ranges.
@@ -129,4 +130,35 @@ func MultiplySlow(m pb.Money, n uint32) pb.Money {
 		n--
 	}
 	return out
+}
+
+// ApplyPayablePercent returns the discount and amount due for a coupon where
+// payablePct is the percentage of the original total the customer should pay.
+func ApplyPayablePercent(total pb.Money, payablePct int32) (pb.Money, pb.Money, error) {
+	if payablePct < 0 || payablePct > 100 {
+		return pb.Money{}, pb.Money{}, ErrInvalidPercentage
+	}
+	if !IsValid(total) || IsNegative(total) {
+		return pb.Money{}, pb.Money{}, ErrInvalidValue
+	}
+	discountPct := int64(100 - payablePct)
+	totalNanos := moneyToNanos(total)
+	discountNanos := totalNanos * discountPct / 100
+	discount := nanosToMoney(discountNanos, total.GetCurrencyCode())
+	due := nanosToMoney(totalNanos-discountNanos, total.GetCurrencyCode())
+	return discount, due, nil
+}
+
+func moneyToNanos(m pb.Money) int64 {
+	return m.GetUnits()*nanosMod + int64(m.GetNanos())
+}
+
+func nanosToMoney(nanos int64, currency string) pb.Money {
+	units := nanos / nanosMod
+	remaining := int32(nanos % nanosMod)
+	return pb.Money{
+		Units:        units,
+		Nanos:        remaining,
+		CurrencyCode: currency,
+	}
 }
