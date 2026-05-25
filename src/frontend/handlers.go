@@ -15,6 +15,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -26,6 +27,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -43,10 +45,12 @@ type platformDetails struct {
 }
 
 var (
-	frontendMessage  = strings.TrimSpace(os.Getenv("FRONTEND_MESSAGE"))
-	isCymbalBrand    = "true" == strings.ToLower(os.Getenv("CYMBAL_BRANDING"))
-	assistantEnabled = "true" == strings.ToLower(os.Getenv("ENABLE_ASSISTANT"))
-	templates        = template.Must(template.New("").
+	frontendMessage    = strings.TrimSpace(os.Getenv("FRONTEND_MESSAGE"))
+	isCymbalBrand      = "true" == strings.ToLower(os.Getenv("CYMBAL_BRANDING"))
+	assistantEnabled   = "true" == strings.ToLower(os.Getenv("ENABLE_ASSISTANT"))
+	frontendCounters   = map[string]int64{}
+	frontendCountersMu sync.Mutex
+	templates          = template.Must(template.New("").
 				Funcs(template.FuncMap{
 			"renderMoney":        renderMoney,
 			"renderCurrencyLogo": renderCurrencyLogo,
@@ -57,6 +61,7 @@ var (
 var validEnvs = []string{"local", "gcp", "azure", "aws", "onprem", "alibaba"}
 
 func (fe *frontendServer) homeHandler(w http.ResponseWriter, r *http.Request) {
+	frontendCounterInc(`page_view_total{page="home"}`)
 	log := r.Context().Value(ctxKeyLog{}).(logrus.FieldLogger)
 	log.WithField("currency", currentCurrency(r)).Info("home")
 	currencies, err := fe.getCurrencies(r.Context())
@@ -114,6 +119,7 @@ func (fe *frontendServer) homeHandler(w http.ResponseWriter, r *http.Request) {
 		"cart_size":     cartSize(cart),
 		"banner_color":  os.Getenv("BANNER_COLOR"), // illustrates canary deployments
 		"ad":            fe.chooseAd(r.Context(), []string{}, log),
+		"coin_balance":  fe.rewardBalanceOrDefault(r.Context(), sessionID(r)),
 	})); err != nil {
 		log.Error(err)
 	}
@@ -142,6 +148,7 @@ func (plat *platformDetails) setPlatformDetails(env string) {
 }
 
 func (fe *frontendServer) productHandler(w http.ResponseWriter, r *http.Request) {
+	frontendCounterInc(`page_view_total{page="product"}`)
 	log := r.Context().Value(ctxKeyLog{}).(logrus.FieldLogger)
 	id := mux.Vars(r)["id"]
 	if id == "" {
@@ -203,6 +210,7 @@ func (fe *frontendServer) productHandler(w http.ResponseWriter, r *http.Request)
 		"recommendations": recommendations,
 		"cart_size":       cartSize(cart),
 		"packagingInfo":   packagingInfo,
+		"coin_balance":    fe.rewardBalanceOrDefault(r.Context(), sessionID(r)),
 	})); err != nil {
 		log.Println(err)
 	}
@@ -232,7 +240,7 @@ func (fe *frontendServer) addToCartHandler(w http.ResponseWriter, r *http.Reques
 		renderHTTPError(log, r, w, errors.Wrap(err, "failed to add to cart"), http.StatusInternalServerError)
 		return
 	}
-	w.Header().Set("location", baseUrl + "/cart")
+	w.Header().Set("location", baseUrl+"/cart")
 	w.WriteHeader(http.StatusFound)
 }
 
@@ -244,11 +252,12 @@ func (fe *frontendServer) emptyCartHandler(w http.ResponseWriter, r *http.Reques
 		renderHTTPError(log, r, w, errors.Wrap(err, "failed to empty cart"), http.StatusInternalServerError)
 		return
 	}
-	w.Header().Set("location", baseUrl + "/")
+	w.Header().Set("location", baseUrl+"/")
 	w.WriteHeader(http.StatusFound)
 }
 
 func (fe *frontendServer) viewCartHandler(w http.ResponseWriter, r *http.Request) {
+	frontendCounterInc(`page_view_total{page="cart"}`)
 	log := r.Context().Value(ctxKeyLog{}).(logrus.FieldLogger)
 	log.Debug("view user cart")
 	currencies, err := fe.getCurrencies(r.Context())
@@ -312,6 +321,7 @@ func (fe *frontendServer) viewCartHandler(w http.ResponseWriter, r *http.Request
 		"total_cost":       totalPrice,
 		"items":            items,
 		"expiration_years": []int{year, year + 1, year + 2, year + 3, year + 4},
+		"coin_balance":     fe.rewardBalanceOrDefault(r.Context(), sessionID(r)),
 	})); err != nil {
 		log.Println(err)
 	}
@@ -332,6 +342,7 @@ func (fe *frontendServer) placeOrderHandler(w http.ResponseWriter, r *http.Reque
 		ccMonth, _    = strconv.ParseInt(r.FormValue("credit_card_expiration_month"), 10, 32)
 		ccYear, _     = strconv.ParseInt(r.FormValue("credit_card_expiration_year"), 10, 32)
 		ccCVV, _      = strconv.ParseInt(r.FormValue("credit_card_cvv"), 10, 32)
+		couponCode    = strings.ToUpper(strings.TrimSpace(r.FormValue("coupon_code")))
 	)
 
 	payload := validator.PlaceOrderPayload{
@@ -361,6 +372,7 @@ func (fe *frontendServer) placeOrderHandler(w http.ResponseWriter, r *http.Reque
 				CreditCardCvv:             int32(payload.CcCVV)},
 			UserId:       sessionID(r),
 			UserCurrency: currentCurrency(r),
+			CouponCode:   couponCode,
 			Address: &pb.Address{
 				StreetAddress: payload.StreetAddress,
 				City:          payload.City,
@@ -369,18 +381,24 @@ func (fe *frontendServer) placeOrderHandler(w http.ResponseWriter, r *http.Reque
 				Country:       payload.Country},
 		})
 	if err != nil {
+		frontendCounterInc("checkout_failure_total")
 		renderHTTPError(log, r, w, errors.Wrap(err, "failed to complete the order"), http.StatusInternalServerError)
 		return
 	}
+	frontendCounterInc("checkout_success_total")
 	log.WithField("order", order.GetOrder().GetOrderId()).Info("order placed")
 
 	order.GetOrder().GetItems()
 	recommendations, _ := fe.getRecommendations(r.Context(), sessionID(r), nil)
 
-	totalPaid := *order.GetOrder().GetShippingCost()
-	for _, v := range order.GetOrder().GetItems() {
-		multPrice := money.MultiplySlow(*v.GetCost(), uint32(v.GetItem().GetQuantity()))
-		totalPaid = money.Must(money.Sum(totalPaid, multPrice))
+	totalPaid := order.GetOrder().GetTotalPaid()
+	if totalPaid == nil {
+		computed := *order.GetOrder().GetShippingCost()
+		for _, v := range order.GetOrder().GetItems() {
+			multPrice := money.MultiplySlow(*v.GetCost(), uint32(v.GetItem().GetQuantity()))
+			computed = money.Must(money.Sum(computed, multPrice))
+		}
+		totalPaid = &computed
 	}
 
 	currencies, err := fe.getCurrencies(r.Context())
@@ -393,8 +411,11 @@ func (fe *frontendServer) placeOrderHandler(w http.ResponseWriter, r *http.Reque
 		"show_currency":   false,
 		"currencies":      currencies,
 		"order":           order.GetOrder(),
-		"total_paid":      &totalPaid,
+		"total_paid":      totalPaid,
+		"discount_amount": order.GetOrder().GetDiscountAmount(),
+		"coupon_code":     order.GetOrder().GetCouponCode(),
 		"recommendations": recommendations,
+		"coin_balance":    fe.rewardBalanceOrDefault(r.Context(), sessionID(r)),
 	})); err != nil {
 		log.Println(err)
 	}
@@ -415,6 +436,213 @@ func (fe *frontendServer) assistantHandler(w http.ResponseWriter, r *http.Reques
 	}
 }
 
+type rewardBalanceResponse struct {
+	SessionID string `json:"session_id"`
+	Balance   int    `json:"balance"`
+}
+
+type rewardEarnRequest struct {
+	SessionID string `json:"session_id"`
+	AdID      string `json:"ad_id"`
+	Stage     int    `json:"stage"`
+}
+
+type rewardRedeemRequest struct {
+	SessionID string `json:"session_id"`
+	Cost      int    `json:"cost"`
+}
+
+type rewardRedeemResponse struct {
+	CouponCode       string `json:"coupon_code"`
+	DiscountPct      int    `json:"discount_pct"`
+	RemainingBalance int    `json:"remaining_balance"`
+}
+
+func (fe *frontendServer) watchAdHandler(w http.ResponseWriter, r *http.Request) {
+	frontendCounterInc("ad_click_total")
+	var payload struct {
+		AdID  string `json:"ad_id"`
+		Stage int    `json:"stage"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	var out map[string]interface{}
+	err := fe.rewardPost(r.Context(), "/earn", rewardEarnRequest{
+		SessionID: sessionID(r),
+		AdID:      payload.AdID,
+		Stage:     payload.Stage,
+	}, &out)
+	if err != nil {
+		w.WriteHeader(http.StatusBadGateway)
+		writeJSON(w, map[string]interface{}{"ok": false, "error": err.Error()})
+		return
+	}
+	if payload.Stage == 3 {
+		frontendCounterInc("ad_watch_complete_total")
+	}
+	out["ok"] = true
+	writeJSON(w, out)
+}
+
+func (fe *frontendServer) adStageConfigHandler(w http.ResponseWriter, r *http.Request) {
+	var out map[string]interface{}
+	if err := fe.rewardGet(r.Context(), "/ads/stage-config", &out); err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	writeJSON(w, out)
+}
+
+func (fe *frontendServer) rewardsPageHandler(w http.ResponseWriter, r *http.Request) {
+	currencies, err := fe.getCurrencies(r.Context())
+	if err != nil {
+		renderHTTPError(log, r, w, errors.Wrap(err, "could not retrieve currencies"), http.StatusInternalServerError)
+		return
+	}
+	balance := fe.rewardBalanceOrDefault(r.Context(), sessionID(r))
+	if err := templates.ExecuteTemplate(w, "rewards", injectCommonTemplateData(r, map[string]interface{}{
+		"show_currency": false,
+		"currencies":    currencies,
+		"coin_balance":  balance,
+	})); err != nil {
+		log.Println(err)
+	}
+}
+
+func (fe *frontendServer) redeemHandler(w http.ResponseWriter, r *http.Request) {
+	frontendCounterInc("coupon_apply_total")
+	cost, _ := strconv.Atoi(r.FormValue("cost"))
+	var redeemed rewardRedeemResponse
+	err := fe.rewardPost(r.Context(), "/redeem", rewardRedeemRequest{
+		SessionID: sessionID(r),
+		Cost:      cost,
+	}, &redeemed)
+	currencies, currencyErr := fe.getCurrencies(r.Context())
+	if currencyErr != nil {
+		renderHTTPError(log, r, w, errors.Wrap(currencyErr, "could not retrieve currencies"), http.StatusInternalServerError)
+		return
+	}
+	payload := map[string]interface{}{
+		"show_currency": false,
+		"currencies":    currencies,
+		"coin_balance":  fe.rewardBalanceOrDefault(r.Context(), sessionID(r)),
+	}
+	if err != nil {
+		payload["redeem_error"] = err.Error()
+	} else {
+		payload["redeemed_coupon"] = redeemed
+		payload["coin_balance"] = redeemed.RemainingBalance
+	}
+	if err := templates.ExecuteTemplate(w, "rewards", injectCommonTemplateData(r, payload)); err != nil {
+		log.Println(err)
+	}
+}
+
+func (fe *frontendServer) trackHandler(w http.ResponseWriter, r *http.Request) {
+	var payload struct {
+		Event string `json:"event"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&payload)
+	if payload.Event != "" {
+		frontendCounterInc("track_total")
+	}
+	writeJSON(w, map[string]bool{"ok": true})
+}
+
+func (fe *frontendServer) metricsHandler(w http.ResponseWriter, r *http.Request) {
+	frontendCountersMu.Lock()
+	defer frontendCountersMu.Unlock()
+	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
+	fmt.Fprintln(w, "# TYPE page_view_total counter")
+	fmt.Fprintln(w, "# TYPE ad_click_total counter")
+	fmt.Fprintln(w, "# TYPE ad_watch_complete_total counter")
+	fmt.Fprintln(w, "# TYPE coupon_apply_total counter")
+	fmt.Fprintln(w, "# TYPE checkout_success_total counter")
+	fmt.Fprintln(w, "# TYPE checkout_failure_total counter")
+	fmt.Fprintln(w, "# TYPE track_total counter")
+	for name, value := range frontendCounters {
+		fmt.Fprintf(w, "%s %d\n", name, value)
+	}
+}
+
+func (fe *frontendServer) rewardBalanceOrDefault(ctx context.Context, sessionID string) int {
+	balance, err := fe.getRewardBalance(ctx, sessionID)
+	if err != nil {
+		return -1
+	}
+	return balance
+}
+
+func (fe *frontendServer) getRewardBalance(ctx context.Context, sessionID string) (int, error) {
+	var out rewardBalanceResponse
+	if err := fe.rewardGet(ctx, "/coins/"+sessionID, &out); err != nil {
+		return 0, err
+	}
+	return out.Balance, nil
+}
+
+func (fe *frontendServer) rewardGet(ctx context.Context, path string, out interface{}) error {
+	reqCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, "http://"+fe.rewardServiceAddr+path, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	return decodeRewardResponse(resp, path, out)
+}
+
+func (fe *frontendServer) rewardPost(ctx context.Context, path string, payload interface{}, out interface{}) error {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	reqCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, "http://"+fe.rewardServiceAddr+path, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	return decodeRewardResponse(resp, path, out)
+}
+
+func decodeRewardResponse(resp *http.Response, path string, out interface{}) error {
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("rewardservice %s returned %d: %s", path, resp.StatusCode, string(body))
+	}
+	if out == nil {
+		return nil
+	}
+	return json.Unmarshal(body, out)
+}
+
+func writeJSON(w http.ResponseWriter, payload interface{}) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(payload)
+}
+
+func frontendCounterInc(name string) {
+	frontendCountersMu.Lock()
+	defer frontendCountersMu.Unlock()
+	frontendCounters[name]++
+}
+
 func (fe *frontendServer) logoutHandler(w http.ResponseWriter, r *http.Request) {
 	log := r.Context().Value(ctxKeyLog{}).(logrus.FieldLogger)
 	log.Debug("logging out")
@@ -423,7 +651,7 @@ func (fe *frontendServer) logoutHandler(w http.ResponseWriter, r *http.Request) 
 		c.MaxAge = -1
 		http.SetCookie(w, c)
 	}
-	w.Header().Set("Location", baseUrl + "/")
+	w.Header().Set("Location", baseUrl+"/")
 	w.WriteHeader(http.StatusFound)
 }
 
@@ -561,6 +789,7 @@ func injectCommonTemplateData(r *http.Request, payload map[string]interface{}) m
 		"frontendMessage":   frontendMessage,
 		"currentYear":       time.Now().Year(),
 		"baseUrl":           baseUrl,
+		"coin_balance":      -1,
 	}
 
 	for k, v := range payload {
