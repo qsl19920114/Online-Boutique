@@ -1,4 +1,5 @@
 -- rewardservice:redeem
+-- 兑换优惠券：扣减金币 + 创建优惠券记录（含 cost_coins 用于取消时退还）
 local coins_key = KEYS[1]
 local coupon_key = KEYS[2]
 
@@ -28,7 +29,11 @@ redis.call(
   "status",
   "pending",
   "created_at",
-  created_at
+  created_at,
+  "cost_coins",
+  tostring(cost),
+  "source",
+  "redeem"
 )
 redis.call("EXPIRE", coupon_key, coupon_ttl_sec)
 

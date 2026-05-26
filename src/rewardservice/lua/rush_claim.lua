@@ -22,13 +22,14 @@ if not remaining then
   return {"ok", tostring(coins_per_claim), tostring(balance), tostring(pool_size - 1)}
 end
 
-remaining = tonumber(remaining)
-if remaining <= 0 then
+-- 原子扣减库存（先 DECR 再检查，防止超卖）
+local new_remaining = redis.call("DECR", pool_key)
+if new_remaining < 0 then
+  redis.call("INCR", pool_key)  -- 回滚
   return {"sold_out"}
 end
 
--- 原子扣减库存 + 发放金币
-local new_remaining = redis.call("DECR", pool_key)
+-- 发放金币 + 标记已领取
 redis.call("SET", claimed_key, "1", "EX", ttl_sec)
 local balance = redis.call("INCRBY", coins_key, coins_per_claim)
 

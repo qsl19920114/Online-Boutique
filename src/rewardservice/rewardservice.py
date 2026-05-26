@@ -28,6 +28,7 @@ CHECKIN_DAY_TTL_SEC = 24 * 60 * 60
 CHECKIN_STREAK_TTL_SEC = 30 * 24 * 60 * 60
 EARN_IDEMPOTENCY_TTL_SEC = 24 * 60 * 60
 EARN_LOG_TTL_SEC = 48 * 60 * 60
+TRANSACTION_TTL_SEC = 30 * 24 * 60 * 60  # 30 days
 DEFAULT_RATELIMITS = {
     "earn": 20,
     "checkin": 5,
@@ -36,8 +37,7 @@ DEFAULT_RATELIMITS = {
     "flash": 10,
     "rush": 10,
 }
-RATELIMIT_TTL_SEC = 120
-
+RATELIMIT_WINDOW_SEC = 60  # sliding window duration
 # 秒杀优惠券配置
 FLASH_POOL_SIZE = int(os.getenv("FLASH_POOL_SIZE", "50"))
 FLASH_DURATION_SEC = int(os.getenv("FLASH_DURATION_SEC", "600"))   # 10分钟
@@ -70,17 +70,30 @@ LUA_SCRIPT_NAMES = [
     "rush_claim",
 ]
 
+# ── Prometheus Metrics ──────────────────────────────────────────────────────── #
+
 REQUEST_LATENCY = Histogram(
     "reward_request_duration_seconds",
     "Reward service HTTP request duration.",
     ["endpoint"],
 )
-COINS_EARNED = Counter("coins_earned_total", "Coins earned through ad watching.")
+COINS_EARNED = Counter(
+    "coins_earned_total",
+    "Coins earned by source.",
+    ["source"],
+)
 COIN_BALANCE = Gauge("coin_balance_current", "Latest observed coin balance.", ["session_id"])
-COUPON_REDEEMED = Counter("coupon_redeemed_total", "Coupons redeemed with coins.")
+COUPON_REDEEMED = Counter(
+    "coupon_redeemed_total",
+    "Coupons redeemed with coins by cost.",
+    ["cost"],
+)
 COUPON_USED = Counter("coupon_used_total", "Coupons committed after checkout.")
+COUPON_CANCELLED = Counter("coupon_cancelled_total", "Coupons cancelled (refund issued).")
 COUPON_VALIDATE_FAILED = Counter(
-    "coupon_validate_failed_total", "Coupon validation failures."
+    "coupon_validate_failed_total",
+    "Coupon validation failures by reason.",
+    ["reason"],
 )
 COOLDOWN_REJECTED = Counter("cooldown_rejected_total", "Ad reward cooldown rejections.")
 RATELIMIT_REJECTED = Counter(
@@ -102,6 +115,10 @@ def create_app(redis_client=None):
     app = Flask(__name__)
     app.redis = redis_client or build_redis_client()
     app.lua = _load_lua_scripts()
+    # Pre-load Lua script SHAs for EVALSHA
+    app.lua_shas = {}
+    for name, script in app.lua.items():
+        app.lua_shas[name] = app.redis.script_load(script)
     app.config["RATELIMITS"] = dict(DEFAULT_RATELIMITS)
 
     def timed(endpoint):
@@ -123,19 +140,21 @@ def create_app(redis_client=None):
         limit = int(app.config["RATELIMITS"].get(endpoint, 0))
         if limit <= 0:
             return None
-        client_ip = _client_ip()
-        minute = int(time.time() // 60)
-        key = f"ratelimit:{client_ip}:{endpoint}:{minute}"
+        client_id = _rate_limit_identity()
+        now_ms = int(time.time() * 1000)
+        key = f"ratelimit:{client_id}:{endpoint}"
         allowed = _eval_script(
             app.redis,
             app.lua["ratelimit"],
             [key],
-            [limit, RATELIMIT_TTL_SEC],
+            [limit, RATELIMIT_WINDOW_SEC, now_ms],
         )
         if int(allowed) != 1:
             RATELIMIT_REJECTED.labels(endpoint=endpoint).inc()
             return jsonify({"error": "rate_limited"}), 429
         return None
+
+    # ── 金币余额 ──────────────────────────────────────────────────────────── #
 
     @app.get("/coins/<session_id>")
     @timed("coins")
@@ -144,10 +163,84 @@ def create_app(redis_client=None):
         COIN_BALANCE.labels(session_id=session_id).set(balance)
         return jsonify({"session_id": session_id, "balance": balance})
 
+    # ── 金币流水 ──────────────────────────────────────────────────────────── #
+
+    @app.get("/coins/<session_id>/transactions")
+    @timed("transactions")
+    def transactions(session_id):
+        page = max(1, int(request.args.get("page", "1")))
+        size = min(50, max(1, int(request.args.get("size", "20"))))
+        start = (page - 1) * size
+        stop = start + size - 1
+        log_key = _transaction_key(session_id)
+        total = _int_value(app.redis.llen(log_key))
+        items = app.redis.lrange(log_key, start, stop)
+        result = []
+        for item in items:
+            parts = item.split(":", 3)
+            if len(parts) >= 4:
+                result.append({
+                    "timestamp": int(parts[0]),
+                    "type": parts[1],
+                    "amount": int(parts[2]),
+                    "detail": parts[3],
+                })
+            elif len(parts) == 3:
+                result.append({
+                    "timestamp": int(parts[0]),
+                    "type": parts[1],
+                    "amount": int(parts[2]),
+                    "detail": "",
+                })
+        return jsonify({
+            "session_id": session_id,
+            "page": page,
+            "size": size,
+            "total": total,
+            "transactions": result,
+        })
+
+    # ── 优惠券列表 ────────────────────────────────────────────────────────── #
+
+    @app.get("/coupons")
+    @timed("coupons")
+    def coupon_list():
+        session_id = str(request.args.get("session_id", "")).strip()
+        status_filter = str(request.args.get("status", "")).strip()
+        if not session_id:
+            return jsonify({"error": "session_id is required"}), 400
+
+        index_key = _coupon_index_key(session_id)
+        codes = app.redis.lrange(index_key, 0, -1)
+        coupons = []
+        for code in codes:
+            coupon_data = app.redis.hgetall(_coupon_key(code))
+            if not coupon_data:
+                continue
+            if status_filter and coupon_data.get("status") != status_filter:
+                continue
+            coupons.append({
+                "coupon_code": code,
+                "discount_pct": _int_value(coupon_data.get("discount_pct")),
+                "status": coupon_data.get("status", "unknown"),
+                "source": coupon_data.get("source", "redeem"),
+                "created_at": _int_value(coupon_data.get("created_at")),
+                "cost_coins": _int_value(coupon_data.get("cost_coins")),
+            })
+        return jsonify({
+            "session_id": session_id,
+            "coupons": coupons,
+            "count": len(coupons),
+        })
+
+    # ── 广告阶段配置 ──────────────────────────────────────────────────────── #
+
     @app.get("/ads/stage-config")
     @timed("stage_config")
     def stage_config():
         return jsonify({"stages": STAGES, "cooldown_sec": COOLDOWN_SEC})
+
+    # ── 看广告赚金币 ──────────────────────────────────────────────────────── #
 
     @app.post("/earn")
     @timed("earn")
@@ -209,8 +302,10 @@ def create_app(redis_client=None):
             )
 
         balance = int(result[1])
-        COINS_EARNED.inc(coins_to_add)
+        COINS_EARNED.labels(source="ad").inc(coins_to_add)
         COIN_BALANCE.labels(session_id=session_id).set(balance)
+        # 记录交易流水
+        _record_transaction(app.redis, session_id, "earn", coins_to_add, f"ad:{ad_id}:stage{stage}")
         return jsonify(
             {
                 "coins_added": coins_to_add,
@@ -219,6 +314,8 @@ def create_app(redis_client=None):
                 "max_stage_coins": max(STAGE_COINS.values()),
             }
         )
+
+    # ── 兑换优惠券 ────────────────────────────────────────────────────────── #
 
     @app.post("/redeem")
     @timed("redeem")
@@ -259,8 +356,12 @@ def create_app(redis_client=None):
             return jsonify({"error": "coupon generation failed"}), 500
 
         remaining = int(result[1])
-        COUPON_REDEEMED.inc()
+        COUPON_REDEEMED.labels(cost=str(cost)).inc()
         COIN_BALANCE.labels(session_id=session_id).set(remaining)
+        # 索引优惠券到用户列表
+        app.redis.lpush(_coupon_index_key(session_id), code)
+        # 记录交易流水
+        _record_transaction(app.redis, session_id, "redeem", -cost, f"coupon:{code}")
         return jsonify(
             {
                 "coupon_code": code,
@@ -268,6 +369,8 @@ def create_app(redis_client=None):
                 "remaining_balance": remaining,
             }
         )
+
+    # ── 优惠券校验 ────────────────────────────────────────────────────────── #
 
     @app.post("/coupon/validate")
     @timed("coupon_validate")
@@ -279,16 +382,21 @@ def create_app(redis_client=None):
             app.redis,
             app.lua["coupon_validate"],
             [_coupon_key(code)],
-            [session_id, int(time.time())],
+            [session_id, int(time.time()), COUPON_TTL_SEC],
         )
         if result[0] == "not_found":
-            COUPON_VALIDATE_FAILED.inc()
+            COUPON_VALIDATE_FAILED.labels(reason="not_found").inc()
             return jsonify({"error": "coupon not found"}), 404
+        if result[0] == "expired":
+            COUPON_VALIDATE_FAILED.labels(reason="expired").inc()
+            return jsonify({"error": "coupon has expired"}), 410
         if result[0] != "ok":
-            COUPON_VALIDATE_FAILED.inc()
+            COUPON_VALIDATE_FAILED.labels(reason="unavailable").inc()
             return jsonify({"error": "coupon is not available"}), 400
 
         return jsonify({"valid": True, "discount_pct": int(result[1])})
+
+    # ── 优惠券核销 ────────────────────────────────────────────────────────── #
 
     @app.post("/coupon/commit")
     @timed("coupon_commit")
@@ -308,22 +416,36 @@ def create_app(redis_client=None):
         COUPON_USED.inc()
         return jsonify({"success": True})
 
+    # ── 优惠券取消（退金币）───────────────────────────────────────────────── #
+
     @app.post("/coupon/cancel")
     @timed("coupon_cancel")
     def coupon_cancel():
         payload = request.get_json(silent=True) or {}
         code = str(payload.get("coupon_code", "")).strip().upper()
+        # 需要从 coupon 中读取 session_id 来退金币
+        coupon_data = app.redis.hgetall(_coupon_key(code))
+        session_id = coupon_data.get("session_id", "") if coupon_data else ""
         result = _eval_script(
             app.redis,
             app.lua["coupon_cancel"],
-            [_coupon_key(code)],
-            [],
+            [_coupon_key(code), _coins_key(session_id)],
+            [int(time.time())],
         )
         if result[0] == "not_found":
             return jsonify({"error": "coupon not found"}), 404
         if result[0] != "ok":
             return jsonify({"error": "coupon is not locked"}), 409
-        return jsonify({"success": True})
+        refund = int(result[1])
+        COUPON_CANCELLED.inc()
+        if refund > 0 and session_id:
+            COIN_BALANCE.labels(session_id=session_id).set(
+                _int_value(app.redis.get(_coins_key(session_id)))
+            )
+            _record_transaction(app.redis, session_id, "refund", refund, f"coupon_cancel:{code}")
+        return jsonify({"success": True, "refund_coins": refund})
+
+    # ── 签到状态 ──────────────────────────────────────────────────────────── #
 
     @app.get("/checkin/status")
     @timed("checkin_status")
@@ -369,6 +491,8 @@ def create_app(redis_client=None):
             }
         )
 
+    # ── 签到 ──────────────────────────────────────────────────────────────── #
+
     @app.post("/checkin")
     @timed("checkin")
     def checkin():
@@ -408,7 +532,9 @@ def create_app(redis_client=None):
         CHECKIN_STREAK.observe(streak)
         if weekly_bonus:
             WEEKLY_BONUS.inc()
+        COINS_EARNED.labels(source="checkin").inc(coins_added)
         COIN_BALANCE.labels(session_id=session_id).set(balance)
+        _record_transaction(app.redis, session_id, "checkin", coins_added, f"streak:{streak}")
         return jsonify(
             {
                 "coins_added": coins_added,
@@ -498,11 +624,22 @@ def create_app(redis_client=None):
         # 预热池（如果尚未初始化）
         if not app.redis.exists(pool_key):
             app.redis.set(pool_key, FLASH_POOL_SIZE, ex=FLASH_DURATION_SEC)
+        # 生成优惠券码（在 Lua 之前确定，传入脚本保证原子性）
+        code = _new_coupon_code()
         result = _eval_script(
             app.redis,
             app.lua["flash_claim"],
-            [pool_key, claimed_key, _coins_key(session_id)],
-            [FLASH_POOL_SIZE, FLASH_COST_COINS, FLASH_DURATION_SEC],
+            [pool_key, claimed_key, _coins_key(session_id), _coupon_key(code)],
+            [
+                FLASH_POOL_SIZE,
+                FLASH_COST_COINS,
+                FLASH_DURATION_SEC,
+                FLASH_DISCOUNT_PCT,
+                session_id,
+                int(time.time()),
+                COUPON_TTL_SEC,
+                code,
+            ],
         )
         if result[0] == "already_claimed":
             return jsonify({"error": "already_claimed"}), 409
@@ -512,24 +649,19 @@ def create_app(redis_client=None):
         if result[0] == "insufficient_coins":
             return jsonify({"error": "insufficient_coins", "balance": int(result[1])}), 400
         remaining = int(result[1])
-        # 生成优惠券
-        for _ in range(3):
-            code = _new_coupon_code()
-            if not app.redis.exists(_coupon_key(code)):
-                break
-        app.redis.hset(_coupon_key(code), mapping={
-            "discount_pct": str(FLASH_DISCOUNT_PCT),
-            "session_id": session_id,
-            "status": "active",
-            "created_at": str(int(time.time())),
-            "source": "flash",
-        })
-        app.redis.expire(_coupon_key(code), COUPON_TTL_SEC)
+        coupon_code = result[2]
         balance = _int_value(app.redis.get(_coins_key(session_id)))
         FLASH_CLAIMED.inc()
+        if FLASH_COST_COINS > 0:
+            COINS_EARNED.labels(source="flash_spend").inc(0)  # no-op, just tracking
         COIN_BALANCE.labels(session_id=session_id).set(balance)
+        # 索引优惠券到用户列表
+        app.redis.lpush(_coupon_index_key(session_id), coupon_code)
+        # 记录交易流水
+        if FLASH_COST_COINS > 0:
+            _record_transaction(app.redis, session_id, "flash_claim", -FLASH_COST_COINS, f"coupon:{coupon_code}")
         return jsonify({
-            "coupon_code": code,
+            "coupon_code": coupon_code,
             "discount_pct": FLASH_DISCOUNT_PCT,
             "cost_coins": FLASH_COST_COINS,
             "remaining": remaining,
@@ -604,13 +736,16 @@ def create_app(redis_client=None):
         balance = int(result[2])
         remaining = int(result[3])
         RUSH_CLAIMED.inc()
-        COINS_EARNED.inc(coins_added)
+        COINS_EARNED.labels(source="rush").inc(coins_added)
         COIN_BALANCE.labels(session_id=session_id).set(balance)
+        _record_transaction(app.redis, session_id, "rush", coins_added, f"slot:{slot}")
         return jsonify({
             "coins_added": coins_added,
             "balance": balance,
             "remaining": remaining,
         })
+
+    # ── 监控 & 健康 ──────────────────────────────────────────────────────── #
 
     @app.get("/metrics")
     def metrics():
@@ -627,6 +762,8 @@ def create_app(redis_client=None):
 
     return app
 
+
+# ── 工具函数 ────────────────────────────────────────────────────────────────── #
 
 def build_redis_client():
     host, port = _redis_host_port(os.getenv("REDIS_ADDR", "redis-cart:6379"))
@@ -676,6 +813,19 @@ def _rate_limit_endpoint(path, method):
     if path == "/rush/claim":
         return "rush"
     return None
+
+
+def _rate_limit_identity():
+    """限流标识：session_id 优先，回退到 IP。"""
+    # 尝试从请求体中提取 session_id
+    payload = request.get_json(silent=True) or {}
+    sid = str(payload.get("session_id", "")).strip()
+    if not sid:
+        sid = str(request.args.get("session_id", "")).strip()
+    if sid:
+        return f"s:{sid}"
+    # 回退到 IP
+    return f"ip:{_client_ip()}"
 
 
 def _client_ip():
@@ -743,12 +893,29 @@ def _coupon_key(code):
     return f"coupon:{code}"
 
 
+def _coupon_index_key(session_id):
+    return f"coupon_index:{session_id}"
+
+
 def _checkin_key(session_id, today):
     return f"checkin:{session_id}:{today}"
 
 
 def _checkin_streak_key(session_id):
     return f"checkin_streak:{session_id}"
+
+
+def _transaction_key(session_id):
+    return f"txlog:{session_id}"
+
+
+def _record_transaction(redis_client, session_id, tx_type, amount, detail):
+    """记录一笔交易流水到 Redis List。"""
+    key = _transaction_key(session_id)
+    entry = f"{int(time.time())}:{tx_type}:{amount}:{detail}"
+    redis_client.lpush(key, entry)
+    redis_client.ltrim(key, 0, 999)  # 保留最近 1000 条
+    redis_client.expire(key, TRANSACTION_TTL_SEC)
 
 
 # ── 秒杀 ──────────────────────────────────────────────────────────────────── #
