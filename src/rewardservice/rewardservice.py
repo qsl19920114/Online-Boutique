@@ -36,6 +36,7 @@ DEFAULT_RATELIMITS = {
     "coupon": 30,
     "flash": 10,
     "rush": 10,
+    "tree": 20,
 }
 RATELIMIT_WINDOW_SEC = 60  # sliding window duration
 # 秒杀优惠券配置
@@ -68,7 +69,24 @@ LUA_SCRIPT_NAMES = [
     "ratelimit",
     "flash_claim",
     "rush_claim",
+    "tree_water",
+    "tree_water_ad",
+    "tree_harvest",
 ]
+
+# ── 种树配置 ────────────────────────────────────────────────────────────────── #
+# 每级树：成长目标、每次浇水成长值、每次广告浇水成长值、浇水金币、收获金币、名称
+TREE_CONFIG = {
+    1: {"growth_target": 100, "growth_per_water": 10, "growth_per_ad": 8,
+        "coins_per_water": 2, "harvest_coins": 50, "name": "seedling", "emoji": "🌱"},
+    2: {"growth_target": 200, "growth_per_water": 8, "growth_per_ad": 6,
+        "coins_per_water": 3, "harvest_coins": 120, "name": "sapling", "emoji": "🌿"},
+    3: {"growth_target": 300, "growth_per_water": 5, "growth_per_ad": 4,
+        "coins_per_water": 5, "harvest_coins": 250, "name": "mature", "emoji": "🌳"},
+}
+TREE_MAX_STAGE = max(TREE_CONFIG.keys())
+TREE_MAX_AD_WATERS = 3
+TREE_DAY_TTL_SEC = 27 * 60 * 60  # 浇水标记过期时间（留余量）
 
 # ── Prometheus Metrics ──────────────────────────────────────────────────────── #
 
@@ -109,6 +127,10 @@ FLASH_CLAIMED = Counter("flash_sale_claimed_total", "Flash sale coupons claimed.
 FLASH_SOLD_OUT = Counter("flash_sale_sold_out_total", "Flash sale sold-out rejections.")
 RUSH_CLAIMED = Counter("rush_claimed_total", "On-the-hour coin rush claims.")
 RUSH_SOLD_OUT = Counter("rush_sold_out_total", "Rush sold-out rejections.")
+TREE_PLANTED = Counter("tree_planted_total", "Trees planted.")
+TREE_WATERED = Counter("tree_watered_total", "Tree watering actions.", ["type"])
+TREE_HARVESTED = Counter("tree_harvested_total", "Trees harvested.", ["stage"])
+TREE_HARVEST_COINS = Counter("tree_harvest_coins_total", "Coins earned from tree harvest.", ["stage"])
 
 
 def create_app(redis_client=None):
@@ -745,6 +767,252 @@ def create_app(redis_client=None):
             "remaining": remaining,
         })
 
+    # ------------------------------------------------------------------ #
+    #  种树浇水                                                           #
+    # ------------------------------------------------------------------ #
+
+    @app.get("/tree")
+    @timed("tree_status")
+    def tree_status():
+        session_id = str(request.args.get("session_id", "")).strip()
+        if not session_id:
+            return jsonify({"error": "session_id is required"}), 400
+
+        tree = app.redis.hgetall(_tree_key(session_id))
+        if not tree:
+            return jsonify({"planted": False})
+
+        stage = _int_value(tree.get("stage"))
+        cfg = TREE_CONFIG.get(stage, TREE_CONFIG[1])
+        growth = _int_value(tree.get("growth"))
+        today = _today_string()
+        watered_today = bool(app.redis.get(_tree_water_key(session_id, today)))
+        ad_count = _int_value(app.redis.get(_tree_ad_water_count_key(session_id, today)))
+        harvested = int(tree.get("harvested", "0")) == 1
+
+        return jsonify({
+            "planted": True,
+            "stage": stage,
+            "name": cfg["name"],
+            "emoji": cfg["emoji"],
+            "growth": growth,
+            "growth_target": cfg["growth_target"],
+            "growth_pct": min(100, growth * 100 // max(1, cfg["growth_target"])),
+            "water_count": _int_value(tree.get("water_count")),
+            "watered_today": watered_today,
+            "ad_waters_today": ad_count,
+            "max_ad_waters": TREE_MAX_AD_WATERS,
+            "harvested": harvested,
+            "harvest_coins": cfg["harvest_coins"],
+            "coins_per_water": cfg["coins_per_water"],
+        })
+
+    @app.post("/tree/plant")
+    @timed("tree_plant")
+    def tree_plant():
+        payload = request.get_json(silent=True) or {}
+        session_id = str(payload.get("session_id", "")).strip()
+        if not session_id:
+            return jsonify({"error": "session_id is required"}), 400
+
+        tree_key = _tree_key(session_id)
+        tree = app.redis.hgetall(tree_key)
+        if tree and int(tree.get("harvested", "0")) != 1:
+            return jsonify({"error": "tree_already_exists", "stage": int(tree["stage"])}), 409
+
+        # 收获后种下一级，否则从1级开始
+        next_stage = 1
+        if tree:
+            prev_stage = _int_value(tree.get("stage"))
+            next_stage = prev_stage + 1 if prev_stage < TREE_MAX_STAGE else 1
+
+        cfg = TREE_CONFIG[next_stage]
+        app.redis.hset(tree_key, mapping={
+            "stage": str(next_stage),
+            "growth": "0",
+            "water_count": "0",
+            "planted_at": str(int(time.time())),
+            "harvested": "0",
+        })
+        TREE_PLANTED.inc()
+        return jsonify({
+            "planted": True,
+            "stage": next_stage,
+            "name": cfg["name"],
+            "emoji": cfg["emoji"],
+            "growth_target": cfg["growth_target"],
+        })
+
+    @app.post("/tree/water")
+    @timed("tree_water")
+    def tree_water():
+        payload = request.get_json(silent=True) or {}
+        session_id = str(payload.get("session_id", "")).strip()
+        if not session_id:
+            return jsonify({"error": "session_id is required"}), 400
+
+        tree_key = _tree_key(session_id)
+        tree = app.redis.hgetall(tree_key)
+        if not tree:
+            return jsonify({"error": "no_tree"}), 404
+
+        stage = _int_value(tree.get("stage"))
+        cfg = TREE_CONFIG.get(stage, TREE_CONFIG[1])
+        today = _today_string()
+
+        result = _eval_script(
+            app.redis,
+            app.lua["tree_water"],
+            [
+                tree_key,
+                _tree_water_key(session_id, today),
+                _coins_key(session_id),
+            ],
+            [
+                today,
+                cfg["growth_per_water"],
+                cfg["coins_per_water"],
+                TREE_DAY_TTL_SEC,
+                cfg["growth_target"],
+            ],
+        )
+        if result[0] == "duplicate":
+            return jsonify({"error": "already_watered_today"}), 409
+        if result[0] == "no_tree":
+            return jsonify({"error": "no_tree"}), 404
+        if result[0] == "already_harvested":
+            return jsonify({"error": "tree_already_harvested"}), 409
+
+        growth = int(result[1])
+        coins_gain = int(result[2])
+        balance = int(result[3])
+        harvested = result[4] == "1"
+
+        TREE_WATERED.labels(type="free").inc()
+        COINS_EARNED.labels(source="tree_water").inc(coins_gain)
+        COIN_BALANCE.labels(session_id=session_id).set(balance)
+        _record_transaction(app.redis, session_id, "tree_water", coins_gain,
+                            f"tree:stage{stage}:growth{growth}")
+
+        return jsonify({
+            "growth": growth,
+            "growth_target": cfg["growth_target"],
+            "growth_pct": min(100, growth * 100 // max(1, cfg["growth_target"])),
+            "coins_added": coins_gain,
+            "balance": balance,
+            "harvested": harvested,
+        })
+
+    @app.post("/tree/water/ad")
+    @timed("tree_water_ad")
+    def tree_water_ad():
+        payload = request.get_json(silent=True) or {}
+        session_id = str(payload.get("session_id", "")).strip()
+        ad_id = str(payload.get("ad_id", "")).strip()
+        if not session_id or not ad_id:
+            return jsonify({"error": "session_id and ad_id are required"}), 400
+
+        tree_key = _tree_key(session_id)
+        tree = app.redis.hgetall(tree_key)
+        if not tree:
+            return jsonify({"error": "no_tree"}), 404
+
+        stage = _int_value(tree.get("stage"))
+        cfg = TREE_CONFIG.get(stage, TREE_CONFIG[1])
+        today = _today_string()
+
+        result = _eval_script(
+            app.redis,
+            app.lua["tree_water_ad"],
+            [
+                tree_key,
+                _tree_ad_water_idem_key(session_id, today, ad_id),
+                _coins_key(session_id),
+                _tree_ad_water_count_key(session_id, today),
+            ],
+            [
+                cfg["growth_per_ad"],
+                TREE_DAY_TTL_SEC,
+                cfg["growth_target"],
+                TREE_MAX_AD_WATERS,
+            ],
+        )
+        if result[0] == "duplicate":
+            return jsonify({"error": "ad_already_used"}), 409
+        if result[0] == "no_tree":
+            return jsonify({"error": "no_tree"}), 404
+        if result[0] == "already_harvested":
+            return jsonify({"error": "tree_already_harvested"}), 409
+        if result[0] == "limit_reached":
+            return jsonify({"error": "max_ad_waters_reached", "max": TREE_MAX_AD_WATERS}), 429
+
+        growth = int(result[1])
+        ad_count = int(result[2])
+        harvested = result[3] == "1"
+
+        TREE_WATERED.labels(type="ad").inc()
+        return jsonify({
+            "growth": growth,
+            "growth_target": cfg["growth_target"],
+            "growth_pct": min(100, growth * 100 // max(1, cfg["growth_target"])),
+            "ad_waters_today": ad_count,
+            "max_ad_waters": TREE_MAX_AD_WATERS,
+            "harvested": harvested,
+        })
+
+    @app.post("/tree/harvest")
+    @timed("tree_harvest")
+    def tree_harvest():
+        payload = request.get_json(silent=True) or {}
+        session_id = str(payload.get("session_id", "")).strip()
+        if not session_id:
+            return jsonify({"error": "session_id is required"}), 400
+
+        tree_key = _tree_key(session_id)
+        tree = app.redis.hgetall(tree_key)
+        if not tree:
+            return jsonify({"error": "no_tree"}), 404
+
+        stage = _int_value(tree.get("stage"))
+        cfg = TREE_CONFIG.get(stage, TREE_CONFIG[1])
+        next_stage = stage + 1 if stage < TREE_MAX_STAGE else 1
+
+        result = _eval_script(
+            app.redis,
+            app.lua["tree_harvest"],
+            [tree_key, _coins_key(session_id)],
+            [
+                cfg["harvest_coins"],
+                next_stage,
+                TREE_CONFIG[next_stage]["growth_target"],
+                int(time.time()),
+            ],
+        )
+        if result[0] == "no_tree":
+            return jsonify({"error": "no_tree"}), 404
+        if result[0] == "not_ready":
+            return jsonify({"error": "tree_not_ready"}), 409
+
+        harvest_coins = int(result[1])
+        balance = int(result[2])
+        new_stage = int(result[3])
+
+        TREE_HARVESTED.labels(stage=str(stage)).inc()
+        TREE_HARVEST_COINS.labels(stage=str(stage)).inc(harvest_coins)
+        COINS_EARNED.labels(source="tree_harvest").inc(harvest_coins)
+        COIN_BALANCE.labels(session_id=session_id).set(balance)
+        _record_transaction(app.redis, session_id, "tree_harvest", harvest_coins,
+                            f"tree:stage{stage}→stage{new_stage}")
+
+        return jsonify({
+            "harvested_stage": stage,
+            "harvest_coins": harvest_coins,
+            "balance": balance,
+            "next_stage": new_stage,
+            "next_name": TREE_CONFIG[new_stage]["name"],
+            "next_emoji": TREE_CONFIG[new_stage]["emoji"],
+        })
+
     # ── 监控 & 健康 ──────────────────────────────────────────────────────── #
 
     @app.get("/metrics")
@@ -812,6 +1080,8 @@ def _rate_limit_endpoint(path, method):
         return "flash"
     if path == "/rush/claim":
         return "rush"
+    if path == "/tree/water" or path == "/tree/water/ad" or path == "/tree/harvest" or path == "/tree/plant":
+        return "tree"
     return None
 
 
@@ -907,6 +1177,22 @@ def _checkin_streak_key(session_id):
 
 def _transaction_key(session_id):
     return f"txlog:{session_id}"
+
+
+def _tree_key(session_id):
+    return f"tree:{session_id}"
+
+
+def _tree_water_key(session_id, today):
+    return f"tree_water:{session_id}:{today}"
+
+
+def _tree_ad_water_idem_key(session_id, today, ad_id):
+    return f"tree_ad_water:{session_id}:{today}:{ad_id}"
+
+
+def _tree_ad_water_count_key(session_id, today):
+    return f"tree_ad_water_count:{session_id}:{today}"
 
 
 def _record_transaction(redis_client, session_id, tx_type, amount, detail):

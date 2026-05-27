@@ -669,6 +669,80 @@ func (fe *frontendServer) subsidyCheckHandler(w http.ResponseWriter, r *http.Req
 	w.Write(result)
 }
 
+// ────────────────────────────── 种树浇水 ──────────────────────────────────── //
+
+func (fe *frontendServer) treeStatusHandler(w http.ResponseWriter, r *http.Request) {
+	sid := sessionID(r)
+	result, err := fe.rewardGetRaw(r.Context(), "/tree?session_id="+sid)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(result)
+}
+
+func (fe *frontendServer) treePlantHandler(w http.ResponseWriter, r *http.Request) {
+	sid := sessionID(r)
+	body, _ := json.Marshal(map[string]string{"session_id": sid})
+	result, statusCode, err := fe.rewardPostRaw(r.Context(), "/tree/plant", body)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
+	w.Write(result)
+}
+
+func (fe *frontendServer) treeWaterHandler(w http.ResponseWriter, r *http.Request) {
+	sid := sessionID(r)
+	body, _ := json.Marshal(map[string]string{"session_id": sid})
+	result, statusCode, err := fe.rewardPostRaw(r.Context(), "/tree/water", body)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
+	w.Write(result)
+}
+
+func (fe *frontendServer) treeWaterAdHandler(w http.ResponseWriter, r *http.Request) {
+	var payload struct {
+		AdID string `json:"ad_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	body, _ := json.Marshal(map[string]interface{}{
+		"session_id": sessionID(r),
+		"ad_id":      payload.AdID,
+	})
+	result, statusCode, err := fe.rewardPostRaw(r.Context(), "/tree/water/ad", body)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
+	w.Write(result)
+}
+
+func (fe *frontendServer) treeHarvestHandler(w http.ResponseWriter, r *http.Request) {
+	sid := sessionID(r)
+	body, _ := json.Marshal(map[string]string{"session_id": sid})
+	result, statusCode, err := fe.rewardPostRaw(r.Context(), "/tree/harvest", body)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
+	w.Write(result)
+}
+
 func (fe *frontendServer) trackHandler(w http.ResponseWriter, r *http.Request) {
 	var payload struct {
 		Event string `json:"event"`
