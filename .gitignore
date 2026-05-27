@@ -3,6 +3,7 @@
 .gradle/
 .idea/
 .kubernetes-manifests-*/
+.monitoring-local/
 .project
 .skaffold-*.yaml
 .terraform.lock.hcl

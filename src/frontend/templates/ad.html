@@ -365,23 +365,45 @@
   <span class="reward-top-bar-icon">🔥</span>
   <span id="reward-top-bar-text"></span>
   <button class="reward-top-bar-btn" id="reward-top-bar-cta" style="display:none">立即领取</button>
-  <button class="reward-top-bar-close" onclick="document.getElementById('reward-top-bar').style.display='none'" aria-label="关闭">✕</button>
+  <button class="reward-top-bar-close" id="reward-top-bar-close-btn" aria-label="关闭">✕</button>
 </div>
 <script>
 (function(){
   var bar = document.getElementById('reward-top-bar');
   var textEl = document.getElementById('reward-top-bar-text');
   var ctaBtn = document.getElementById('reward-top-bar-cta');
-  var dismissed = sessionStorage.getItem('top_bar_dismissed');
-  if (dismissed) return;
+  var closeBtn = document.getElementById('reward-top-bar-close-btn');
+  // 最多弹 3 次：用计数器，而非一次性 dismissed 标记
+  var MAX_SHOW = 3;
+  var REDISPLAY_DELAY = 30000; // 叉掉 30s 后重新弹出
+  var showCount = parseInt(sessionStorage.getItem('top_bar_count') || '0', 10);
+  if (showCount >= MAX_SHOW) return;
+
+  closeBtn.addEventListener('click', function(){
+    bar.style.display = 'none';
+    var cnt = parseInt(sessionStorage.getItem('top_bar_count') || '0', 10);
+    sessionStorage.setItem('top_bar_count', cnt + 1);
+    if (cnt + 1 < MAX_SHOW) {
+      // 延迟后重新展示（每次间隔递增）
+      setTimeout(function(){ bar.style.display = ''; }, REDISPLAY_DELAY * (cnt + 1));
+    }
+  });
 
   function formatCountdown(sec) {
     var m = Math.floor(sec / 60), s = sec % 60;
     return m + 'min ' + (s < 10 ? '0' : '') + s + 's';
   }
 
+  // 初始化共享 flash 状态请求（sidebar 等其他组件复用，避免重复 fetch）
+  window.__reward = window.__reward || {};
+  function fetchFlashFresh() {
+    window.__reward.flashP = fetch('/ads/flash/status').then(function(r){ return r.json(); }).catch(function(){ return {}; });
+    return window.__reward.flashP;
+  }
+  if (!window.__reward.flashP) fetchFlashFresh();
+
   function checkFlash() {
-    fetch('/ads/flash/status').then(function(r){ return r.json(); }).then(function(d){
+    window.__reward.flashP.then(function(d){
       if (d.active && !d.claimed) {
         textEl.textContent = '⚡ 秒杀进行中！' + d.discount_pct + '折优惠券 剩余' + d.remaining + '张';
         ctaBtn.style.display = '';
@@ -394,11 +416,11 @@
         var left = d.next_in_sec;
         var timer = setInterval(function(){
           left--;
-          if (left <= 0) { clearInterval(timer); checkFlash(); return; }
+          if (left <= 0) { clearInterval(timer); fetchFlashFresh(); checkFlash(); return; }
           textEl.textContent = '下次秒杀倒计时：' + formatCountdown(left);
         }, 1000);
       }
-    }).catch(function(){});
+    });
   }
 
   function claimFlash() {
@@ -416,8 +438,8 @@
   }
 
   checkFlash();
-  document.getElementById('reward-top-bar-close') && document.getElementById('reward-top-bar-close').addEventListener('click', function(){
-    sessionStorage.setItem('top_bar_dismissed', '1');
+  document.getElementById('reward-top-bar-close-btn') && document.getElementById('reward-top-bar-close-btn').addEventListener('click', function(){
+    // close handled above
   });
 })();
 </script>
@@ -467,8 +489,10 @@
     return m + ':' + (s<10?'0':'') + s;
   }
 
-  // 秒杀状态
-  fetch('/ads/flash/status').then(function(r){ return r.json(); }).then(function(d){
+  // 复用 top_bar 已发起的 flash 请求（共享 Promise，避免重复 fetch）
+  window.__reward = window.__reward || {};
+  window.__reward.flashP = window.__reward.flashP || fetch('/ads/flash/status').then(function(r){ return r.json(); }).catch(function(){ return {}; });
+  window.__reward.flashP.then(function(d){
     var info = document.getElementById('sidebar-flash-info');
     var btn = document.getElementById('sidebar-flash-btn');
     if (d.active && !d.claimed) {
@@ -484,12 +508,41 @@
     } else if (d.claimed) {
       info.textContent = '今场已领取 ✓';
     } else {
-      info.textContent = d.next_in_sec > 0 ? '下场：' + formatSec(d.next_in_sec) + '后' : '暂无活动';
+      var left = d.next_in_sec || 0;
+      info.textContent = left > 0 ? '下场：' + formatSec(left) + '后' : '暂无活动';
+      // 新增：sidebar 秒杀倒计时，归零后自动刷新状态并切换为"马上抢"按钮
+      if (left > 0) {
+        var flashTimer = setInterval(function(){
+          left--;
+          if (left <= 0) {
+            clearInterval(flashTimer);
+            window.__reward.flashP = fetch('/ads/flash/status').then(function(r){ return r.json(); }).catch(function(){ return {}; });
+            window.__reward.flashP.then(function(nd){
+              if (nd.active && !nd.claimed) {
+                info.textContent = nd.discount_pct + '折券 剩余' + nd.remaining + '张';
+                btn.style.display = '';
+                btn.onclick = function(){
+                  btn.disabled = true;
+                  fetch('/ads/flash/claim',{method:'POST'}).then(function(r){return r.json();}).then(function(rd){
+                    if(rd.coupon_code){ info.textContent='券码：'+rd.coupon_code; btn.style.display='none'; }
+                    else { info.textContent = rd.error||'失败'; }
+                  });
+                };
+              } else {
+                info.textContent = '暂无活动';
+              }
+            });
+            return;
+          }
+          info.textContent = '下场：' + formatSec(left) + '后';
+        }, 1000);
+      }
     }
   }).catch(function(){ document.getElementById('sidebar-flash-info').textContent = '暂无活动'; });
 
-  // 整点抢金币状态
-  fetch('/ads/rush/status').then(function(r){ return r.json(); }).then(function(d){
+  // 复用共享 rush 请求（rush_widget 先渲染则直接复用，否则新建）
+  window.__reward.rushP = window.__reward.rushP || fetch('/ads/rush/status').then(function(r){ return r.json(); }).catch(function(){ return {}; });
+  window.__reward.rushP.then(function(d){
     var info = document.getElementById('sidebar-rush-info');
     var btn = document.getElementById('sidebar-rush-btn');
     if (d.is_rush_time && d.active && !d.claimed) {
@@ -552,7 +605,10 @@
     return m+':'+(s<10?'0':'')+s;
   }
 
-  fetch('/ads/rush/status').then(function(r){return r.json();}).then(function(d){
+  // 复用 sidebar 已发起的 rush 请求（共享 Promise，避免重复 fetch）
+  window.__reward = window.__reward || {};
+  window.__reward.rushP = window.__reward.rushP || fetch('/ads/rush/status').then(function(r){ return r.json(); }).catch(function(){ return {}; });
+  window.__reward.rushP.then(function(d){
     widget.style.display='';
     if(d.is_rush_time && d.active && !d.claimed){
       countdownEl.textContent='剩余'+formatSec(d.ends_in_sec);
@@ -591,6 +647,270 @@
       }
     }
   }).catch(function(){ widget.style.display='none'; });
+})();
+</script>
+{{ end }}
+
+{{/* ======================== 插屏弹窗广告（进入页面自动弹，最多3次）======================== */}}
+{{ define "ad_interstitial" }}
+<div id="ad-interstitial" class="ad-interstitial-backdrop" style="display:none" role="dialog" aria-modal="true">
+  <div class="ad-interstitial-card" id="ad-interstitial-card">
+    <button class="ad-interstitial-close" id="ad-interstitial-close" aria-label="关闭">✕</button>
+    <div class="ad-interstitial-media" id="ad-interstitial-media"></div>
+    <div class="ad-interstitial-body">
+      <span class="ad-interstitial-badge" id="ad-interstitial-badge">广告</span>
+      <h3 class="ad-interstitial-title" id="ad-interstitial-title"></h3>
+      <p class="ad-interstitial-desc" id="ad-interstitial-desc"></p>
+      <a class="ad-interstitial-cta cymbal-button-primary" id="ad-interstitial-cta" href="#">立即查看</a>
+    </div>
+    <div class="ad-interstitial-footer">
+      <span id="ad-interstitial-counter"></span>
+      <button class="ad-interstitial-skip" id="ad-interstitial-skip">跳过广告</button>
+    </div>
+  </div>
+</div>
+<div id="ad-corner-strip" class="ad-corner-strip" style="display:none">
+  <button class="ad-corner-strip-close" id="ad-corner-strip-close" aria-label="关闭">✕</button>
+  <div class="ad-corner-strip-inner" id="ad-corner-strip-inner"></div>
+</div>
+<style>
+/* ---- 插屏弹窗 ---- */
+.ad-interstitial-backdrop {
+  position: fixed; inset: 0; z-index: 9000;
+  background: rgba(0,0,0,.55); display: flex;
+  align-items: center; justify-content: center;
+  animation: adFadeIn .3s ease;
+}
+@keyframes adFadeIn { from { opacity:0 } to { opacity:1 } }
+.ad-interstitial-card {
+  background: #fff; border-radius: 16px; overflow: hidden;
+  width: min(480px, 92vw); box-shadow: 0 8px 40px rgba(0,0,0,.3);
+  position: relative; animation: adSlideUp .35s ease;
+}
+@keyframes adSlideUp { from { transform:translateY(40px); opacity:0 } to { transform:none; opacity:1 } }
+.ad-interstitial-close {
+  position: absolute; top: 10px; right: 12px; z-index: 2;
+  background: rgba(0,0,0,.35); border: none; border-radius: 50%;
+  width: 28px; height: 28px; color: #fff; font-size: 14px;
+  cursor: pointer; line-height: 28px; text-align: center; padding: 0;
+}
+.ad-interstitial-media {
+  width: 100%; height: 200px;
+  background-size: cover; background-position: center;
+  background-color: #f0f0f0;
+}
+.ad-interstitial-body { padding: 18px 20px 8px; }
+.ad-interstitial-badge {
+  display: inline-block; font-size: 10px; font-weight: 700;
+  padding: 2px 8px; border-radius: 20px; margin-bottom: 8px;
+  background: #ff4400; color: #fff; letter-spacing: .5px;
+}
+.ad-interstitial-title { margin: 0 0 6px; font-size: 18px; font-weight: 700; color: #1a1a2e; }
+.ad-interstitial-desc  { margin: 0 0 14px; font-size: 13px; color: #666; line-height: 1.5; }
+.ad-interstitial-cta {
+  display: block; text-align: center; padding: 10px; font-size: 15px;
+  border-radius: 8px; text-decoration: none; font-weight: 600;
+}
+.ad-interstitial-footer {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 20px 14px; font-size: 12px; color: #999;
+}
+.ad-interstitial-skip {
+  background: none; border: none; color: #888; font-size: 12px;
+  cursor: pointer; text-decoration: underline; padding: 0;
+}
+/* ---- 角落贴片 ---- */
+.ad-corner-strip {
+  position: fixed; bottom: 90px; left: 16px; z-index: 8000;
+  width: 240px; border-radius: 12px; overflow: hidden;
+  box-shadow: 0 4px 20px rgba(0,0,0,.25);
+  animation: adSlideRight .4s ease;
+}
+@keyframes adSlideRight { from { transform:translateX(-260px) } to { transform:none } }
+.ad-corner-strip-close {
+  position: absolute; top: 6px; right: 8px;
+  background: rgba(0,0,0,.4); border: none; border-radius: 50%;
+  width: 22px; height: 22px; color: #fff; font-size: 11px;
+  cursor: pointer; line-height: 22px; text-align: center; padding: 0; z-index: 2;
+}
+.ad-corner-strip-inner { cursor: pointer; }
+/* 各主题贴片 */
+.ad-strip-theme-coins {
+  background: linear-gradient(135deg, #f7971e, #ffd200);
+  padding: 14px 14px 14px 14px; color: #1a1a1a;
+}
+.ad-strip-theme-flash {
+  background: linear-gradient(135deg, #e52e71, #ff4500);
+  padding: 14px; color: #fff;
+}
+.ad-strip-theme-new {
+  background: linear-gradient(135deg, #1a1a2e, #16213e);
+  padding: 14px; color: #fff;
+}
+.ad-strip-theme-coupon {
+  background: linear-gradient(135deg, #134e5e, #71b280);
+  padding: 14px; color: #fff;
+}
+.ad-strip-theme-subsidy {
+  background: linear-gradient(135deg, #6a3093, #a044ff);
+  padding: 14px; color: #fff;
+}
+.ad-strip-emo  { font-size: 28px; line-height: 1; margin-bottom: 6px; }
+.ad-strip-title { font-size: 13px; font-weight: 700; margin: 0 0 3px; }
+.ad-strip-sub   { font-size: 11px; opacity: .85; margin: 0 0 8px; }
+.ad-strip-btn {
+  display: inline-block; padding: 5px 14px; border-radius: 20px;
+  font-size: 11px; font-weight: 700; text-decoration: none;
+  background: rgba(255,255,255,.25); color: inherit; border: 1px solid rgba(255,255,255,.5);
+}
+.ad-strip-theme-coins .ad-strip-btn { background: rgba(0,0,0,.15); color: #1a1a1a; border-color: rgba(0,0,0,.2); }
+</style>
+<script>
+(function(){
+  /* ---------- 插屏广告配置 ---------- */
+  var INTERSTITIAL_MAX = 3;
+  var INTERSTITIAL_DELAY_FIRST = 5000;  // 首次弹出延迟
+  var INTERSTITIAL_REDISPLAY   = 60000; // 关闭后重弹间隔
+  var interstitialCount = parseInt(sessionStorage.getItem('interstitial_count') || '0', 10);
+
+  var adThemes = [
+    {
+      badge: '限时优惠', badgeColor: '#e63946',
+      title: '新用户专享 8 折券', desc: '首单即享 80 折，下单立省最高 ¥50！快来领取！',
+      img: '/static/img/products/sunglasses.jpg',
+      cta: '领券下单', ctaColor: '#e63946', href: '/cart',
+    },
+    {
+      badge: '积分活动', badgeColor: '#f7971e',
+      title: '看广告赚金币，兑好礼', desc: '每看一段广告最多获得 100 金币，金币可兑换优惠券。',
+      img: '/static/img/products/watch.jpg',
+      cta: '去赚金币', ctaColor: '#f7971e', href: '/rewards',
+    },
+    {
+      badge: '秒杀预告', badgeColor: '#e52e71',
+      title: '下一场秒杀即将开始', desc: '最高 5 折限时秒杀，数量有限先到先得，不要错过！',
+      img: '/static/img/products/tank-top.jpg',
+      cta: '查看活动', ctaColor: '#e52e71', href: '/',
+    },
+    {
+      badge: '百亿补贴', badgeColor: '#6a3093',
+      title: '百亿补贴精选好物', desc: '每日精选热销品大额补贴，无套路直降到底！',
+      img: '/static/img/products/loafers.jpg',
+      cta: '去逛逛', ctaColor: '#6a3093', href: '/',
+    },
+    {
+      badge: '每日签到', badgeColor: '#134e5e',
+      title: '签到得金币，连签有加成', desc: '每日签到领基础金币，连续签到额外翻倍！',
+      img: '/static/img/products/mug.jpg',
+      cta: '立即签到', ctaColor: '#134e5e', href: '/rewards',
+    },
+  ];
+
+  var backdrop    = document.getElementById('ad-interstitial');
+  var mediaEl     = document.getElementById('ad-interstitial-media');
+  var badgeEl     = document.getElementById('ad-interstitial-badge');
+  var titleEl     = document.getElementById('ad-interstitial-title');
+  var descEl      = document.getElementById('ad-interstitial-desc');
+  var ctaEl       = document.getElementById('ad-interstitial-cta');
+  var counterEl   = document.getElementById('ad-interstitial-counter');
+  var closeBtn    = document.getElementById('ad-interstitial-close');
+  var skipBtn     = document.getElementById('ad-interstitial-skip');
+
+  function pickTheme() {
+    var idx = parseInt(sessionStorage.getItem('interstitial_theme_idx') || Math.floor(Math.random() * adThemes.length), 10);
+    sessionStorage.setItem('interstitial_theme_idx', (idx + 1) % adThemes.length);
+    return adThemes[idx % adThemes.length];
+  }
+
+  function showInterstitial() {
+    interstitialCount = parseInt(sessionStorage.getItem('interstitial_count') || '0', 10);
+    if (interstitialCount >= INTERSTITIAL_MAX) return;
+    var theme = pickTheme();
+    mediaEl.style.backgroundImage = 'url(' + theme.img + ')';
+    badgeEl.textContent = theme.badge;
+    badgeEl.style.background = theme.badgeColor;
+    titleEl.textContent = theme.title;
+    descEl.textContent  = theme.desc;
+    ctaEl.textContent   = theme.cta;
+    ctaEl.href          = theme.href;
+    ctaEl.style.background = theme.ctaColor;
+    counterEl.textContent  = '第 ' + (interstitialCount + 1) + ' / ' + INTERSTITIAL_MAX + ' 条广告';
+    backdrop.style.display = '';
+  }
+
+  function dismissInterstitial() {
+    backdrop.style.display = 'none';
+    var cnt = parseInt(sessionStorage.getItem('interstitial_count') || '0', 10) + 1;
+    sessionStorage.setItem('interstitial_count', cnt);
+    if (cnt < INTERSTITIAL_MAX) {
+      setTimeout(showInterstitial, INTERSTITIAL_REDISPLAY);
+    }
+  }
+
+  closeBtn.addEventListener('click', dismissInterstitial);
+  skipBtn.addEventListener('click',  dismissInterstitial);
+  // 点击背景也关闭
+  backdrop.addEventListener('click', function(e){ if (e.target === backdrop) dismissInterstitial(); });
+
+  // 首次延迟展示
+  if (interstitialCount < INTERSTITIAL_MAX) {
+    setTimeout(showInterstitial, INTERSTITIAL_DELAY_FIRST);
+  }
+
+  /* ---------- 角落贴片广告 ---------- */
+  var STRIP_MAX = 3;
+  var STRIP_REDISPLAY = 45000;
+  var stripCount = parseInt(sessionStorage.getItem('strip_count') || '0', 10);
+  var stripThemes = [
+    { cls: 'ad-strip-theme-coins',   emo: '🪙', title: '赚金币兑好礼',    sub: '看广告 / 签到 / 整点抢',  btn: '去赚', href: '/rewards' },
+    { cls: 'ad-strip-theme-flash',   emo: '⚡', title: '秒杀活动进行中',   sub: '最高 5 折限量抢购',        btn: '去抢', href: '/' },
+    { cls: 'ad-strip-theme-new',     emo: '🆕', title: '新品上市',          sub: '本周上新精选热门单品',     btn: '看看', href: '/' },
+    { cls: 'ad-strip-theme-coupon',  emo: '🎫', title: '专属优惠券到账',    sub: '50 金币可兑 9 折券',       btn: '兑换', href: '/rewards' },
+    { cls: 'ad-strip-theme-subsidy', emo: '💜', title: '百亿补贴不停歇',   sub: '直降真实惠，每日更新',     btn: '选购', href: '/' },
+  ];
+
+  var cornerEl   = document.getElementById('ad-corner-strip');
+  var innerEl    = document.getElementById('ad-corner-strip-inner');
+  var stripClose = document.getElementById('ad-corner-strip-close');
+  var stripIdx   = parseInt(sessionStorage.getItem('strip_theme_idx') || '0', 10);
+
+  function renderStrip(theme) {
+    innerEl.className = 'ad-corner-strip-inner ' + theme.cls;
+    innerEl.innerHTML =
+      '<div class="ad-strip-emo">' + theme.emo + '</div>' +
+      '<p class="ad-strip-title">' + theme.title + '</p>' +
+      '<p class="ad-strip-sub">' + theme.sub + '</p>' +
+      '<a class="ad-strip-btn" href="' + theme.href + '">' + theme.btn + '</a>';
+  }
+
+  function showStrip() {
+    stripCount = parseInt(sessionStorage.getItem('strip_count') || '0', 10);
+    if (stripCount >= STRIP_MAX) return;
+    var theme = stripThemes[stripIdx % stripThemes.length];
+    renderStrip(theme);
+    cornerEl.style.display = '';
+  }
+
+  function dismissStrip() {
+    cornerEl.style.display = 'none';
+    var cnt = parseInt(sessionStorage.getItem('strip_count') || '0', 10) + 1;
+    sessionStorage.setItem('strip_count', cnt);
+    stripIdx = (stripIdx + 1) % stripThemes.length;
+    sessionStorage.setItem('strip_theme_idx', stripIdx);
+    if (cnt < STRIP_MAX) {
+      setTimeout(showStrip, STRIP_REDISPLAY);
+    }
+  }
+
+  stripClose.addEventListener('click', dismissStrip);
+  innerEl.addEventListener('click', function(e){
+    if (!e.target.closest('.ad-strip-btn')) dismissStrip();
+  });
+
+  // 角落贴片：页面载入 2s 后首次展示（与插屏错开）
+  if (stripCount < STRIP_MAX) {
+    setTimeout(showStrip, 2000);
+  }
 })();
 </script>
 {{ end }}

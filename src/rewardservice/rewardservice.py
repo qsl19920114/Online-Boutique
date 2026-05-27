@@ -760,6 +760,12 @@ def create_app(redis_client=None):
             return "redis unavailable", 503
         return "ok"
 
+    @app.get("/demo")
+    def demo_page():
+        path = os.path.join(os.path.dirname(__file__), "rewards_demo.html")
+        with open(path, encoding="utf-8") as demo_file:
+            return Response(demo_file.read(), mimetype="text/html")
+
     return app
 
 
@@ -965,9 +971,7 @@ def _rush_slot(now=None):
     return now.strftime("%Y%m%d%H")
 
 
-app = create_app()
-
-
 if __name__ == "__main__":
+    app = create_app()
     port = int(os.getenv("PORT", "8080"))
     app.run(host="0.0.0.0", port=port)

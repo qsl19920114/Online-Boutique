@@ -1321,3 +1321,21 @@ the rules below could be extracted.
 }
 .rush-widget-btn:hover { transform: scale(1.08); }
 .rush-widget-btn:disabled { opacity: .5; cursor: not-allowed; }
+
+/* ===== 签到未签到红点提示 ===== */
+.checkin-red-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #e53935;
+  margin-left: 3px;
+  vertical-align: middle;
+  position: relative;
+  top: -1px;
+  animation: checkin-pulse 1.4s ease-in-out infinite;
+}
+@keyframes checkin-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%       { opacity: 0.45; transform: scale(0.7); }
+}

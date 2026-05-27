@@ -9,7 +9,8 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY rewardservice.py .
+COPY rewards_demo.html .
 COPY lua ./lua
 
 EXPOSE 8080
-CMD ["gunicorn", "-w", "4", "-k", "gevent", "--worker-connections", "200", "-b", "0.0.0.0:8080", "--timeout", "30", "--access-logfile", "-", "rewardservice:app"]
+CMD ["gunicorn", "-w", "4", "-k", "gevent", "--worker-connections", "200", "-b", "0.0.0.0:8080", "--timeout", "30", "--access-logfile", "-", "rewardservice:create_app()"]

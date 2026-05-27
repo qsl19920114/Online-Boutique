@@ -88,7 +88,7 @@
                         <span class="reward-balance">{{ $.coin_balance }}</span>
                     </a>
                     <a href="{{ $.baseUrl }}/rewards" class="cart-link reward-checkin-link" title="Daily check-in">
-                        Daily
+                        Daily<span class="checkin-red-dot" id="checkin-red-dot" style="display:none"></span>
                     </a>
                     {{ end }}
 
@@ -109,4 +109,14 @@
         </div>
 
     </header>
+    <script>
+    // 今日未签到时在 "Daily" 按钮上显示红点提示
+    (function(){
+      var dot = document.getElementById('checkin-red-dot');
+      if (!dot) return;
+      fetch('/checkin/status').then(function(r){ return r.json(); }).then(function(d){
+        if (d && !d.checked_in) dot.style.display = '';
+      }).catch(function(){});
+    })();
+    </script>
     {{end}}

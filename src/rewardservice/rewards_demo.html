@@ -1,0 +1,602 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Rewards Demo</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #17202a;
+      --muted: #617080;
+      --line: #d8dee7;
+      --paper: #ffffff;
+      --bg: #f4f7fb;
+      --green: #1f9d67;
+      --blue: #2f6fed;
+      --red: #d94645;
+      --amber: #c47a1d;
+      --violet: #7655d8;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background:
+        linear-gradient(180deg, rgba(255,255,255,.85), rgba(244,247,251,.96)),
+        radial-gradient(circle at 14% 8%, rgba(47,111,237,.12), transparent 28%),
+        radial-gradient(circle at 92% 18%, rgba(31,157,103,.12), transparent 26%),
+        var(--bg);
+      color: var(--ink);
+    }
+
+    header {
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      border-bottom: 1px solid rgba(216,222,231,.82);
+      background: rgba(255,255,255,.88);
+      backdrop-filter: blur(14px);
+    }
+
+    .topbar {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 14px 20px;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      justify-content: space-between;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-width: 0;
+    }
+
+    .mark {
+      width: 40px;
+      height: 40px;
+      display: grid;
+      place-items: center;
+      border: 1px solid #f1c86b;
+      border-radius: 8px;
+      color: #7a4e06;
+      background: linear-gradient(145deg, #fff4cc, #ffd46a);
+      font-weight: 900;
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,.5);
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 20px;
+      line-height: 1.2;
+      letter-spacing: 0;
+    }
+
+    .subtle {
+      color: var(--muted);
+      font-size: 13px;
+      margin-top: 3px;
+    }
+
+    .session {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .session code {
+      color: #334155;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 6px 8px;
+      background: #f8fafc;
+      max-width: 280px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    main {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 24px 20px 40px;
+    }
+
+    .grid {
+      display: grid;
+      gap: 16px;
+    }
+
+    .stats {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+
+    .workspace {
+      grid-template-columns: minmax(0, 1.2fr) minmax(320px, .8fr);
+      align-items: start;
+      margin-top: 16px;
+    }
+
+    .card {
+      background: rgba(255,255,255,.94);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: 0 10px 30px rgba(15,23,42,.06);
+    }
+
+    .metric {
+      padding: 18px;
+      min-height: 116px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+
+    .metric .label {
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .metric .value {
+      font-size: 34px;
+      line-height: 1;
+      font-weight: 850;
+      letter-spacing: 0;
+    }
+
+    .metric .foot {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .panel {
+      padding: 18px;
+    }
+
+    .panel h2 {
+      margin: 0 0 14px;
+      font-size: 16px;
+      letter-spacing: 0;
+    }
+
+    .actions {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    button, a.button {
+      appearance: none;
+      border: 1px solid transparent;
+      border-radius: 7px;
+      padding: 10px 12px;
+      min-height: 42px;
+      cursor: pointer;
+      font-weight: 760;
+      font-size: 13px;
+      color: #fff;
+      background: var(--blue);
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      transition: transform .12s ease, box-shadow .12s ease, opacity .12s ease;
+    }
+
+    button:hover, a.button:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 8px 18px rgba(47,111,237,.22);
+    }
+
+    button.secondary { background: #263445; }
+    button.green { background: var(--green); }
+    button.amber { background: var(--amber); }
+    button.red { background: var(--red); }
+    button.violet { background: var(--violet); }
+    button:disabled { opacity: .48; cursor: not-allowed; transform: none; box-shadow: none; }
+
+    .toolbar {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-top: 14px;
+    }
+
+    .split {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .mini {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px;
+      background: #fbfdff;
+    }
+
+    .mini strong {
+      display: block;
+      font-size: 14px;
+      margin-bottom: 7px;
+    }
+
+    .mini span {
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .log {
+      margin: 0;
+      padding: 0;
+      list-style: none;
+      display: grid;
+      gap: 8px;
+      max-height: 360px;
+      overflow: auto;
+    }
+
+    .log li {
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: #fbfdff;
+      font-size: 12px;
+      color: #334155;
+      word-break: break-word;
+    }
+
+    .log li.ok { border-left: 4px solid var(--green); }
+    .log li.err { border-left: 4px solid var(--red); }
+
+    .calendar {
+      display: grid;
+      grid-template-columns: repeat(7, minmax(0, 1fr));
+      gap: 8px;
+      margin-top: 12px;
+    }
+
+    .day {
+      min-height: 62px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 9px;
+      background: #f8fafc;
+      font-size: 12px;
+    }
+
+    .day.checked {
+      border-color: rgba(31,157,103,.35);
+      background: #eefbf4;
+    }
+
+    .day b {
+      display: block;
+      font-size: 13px;
+      margin-bottom: 4px;
+    }
+
+    .metrics-box {
+      margin-top: 12px;
+      padding: 12px;
+      border-radius: 8px;
+      border: 1px solid #dbe5ef;
+      background: #0f172a;
+      color: #d7e3f4;
+      overflow: auto;
+      max-height: 220px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 12px;
+      white-space: pre;
+    }
+
+    .links {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .links a {
+      color: #0f4fbf;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      padding: 12px;
+      text-decoration: none;
+      font-size: 13px;
+      font-weight: 760;
+    }
+
+    @media (max-width: 920px) {
+      .stats, .workspace, .actions, .split, .links {
+        grid-template-columns: 1fr;
+      }
+
+      .topbar {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      .session code {
+        max-width: calc(100vw - 40px);
+      }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="topbar">
+      <div class="brand">
+        <div class="mark">R</div>
+        <div>
+          <h1>Rewards Demo</h1>
+          <div class="subtle">直接调用 rewardservice，制造 Grafana 看板所需的真实指标数据。</div>
+        </div>
+      </div>
+      <div class="session">
+        <span>session</span>
+        <code id="session-id"></code>
+        <button class="secondary" id="reset-session" type="button">重置</button>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <section class="grid stats">
+      <div class="card metric">
+        <div class="label">金币余额</div>
+        <div class="value" id="balance">--</div>
+        <div class="foot">coin_balance_current</div>
+      </div>
+      <div class="card metric">
+        <div class="label">签到连续天数</div>
+        <div class="value" id="streak">--</div>
+        <div class="foot">checkin_streak_histogram</div>
+      </div>
+      <div class="card metric">
+        <div class="label">秒杀库存</div>
+        <div class="value" id="flash-left">--</div>
+        <div class="foot">flash_sale_claimed_total</div>
+      </div>
+      <div class="card metric">
+        <div class="label">整点抢库存</div>
+        <div class="value" id="rush-left">--</div>
+        <div class="foot">rush_claimed_total</div>
+      </div>
+    </section>
+
+    <section class="grid workspace">
+      <div class="grid">
+        <div class="card panel">
+          <h2>奖励动作</h2>
+          <div class="actions">
+            <button type="button" data-stage="1">广告 10s +5</button>
+            <button type="button" data-stage="2">广告 20s +12</button>
+            <button type="button" data-stage="3">广告 30s +20</button>
+            <button class="green" id="burst" type="button">批量造数 +100</button>
+            <button class="amber" id="checkin" type="button">每日签到</button>
+            <button class="violet" id="redeem50" type="button">兑换 9 折券</button>
+            <button class="violet" id="redeem100" type="button">兑换 8 折券</button>
+            <button class="red" id="flash" type="button">抢秒杀券</button>
+            <button class="red" id="rush" type="button">整点抢金币</button>
+          </div>
+          <div class="toolbar">
+            <button class="secondary" id="refresh" type="button">刷新状态</button>
+            <button class="secondary" id="load-metrics" type="button">查看 /metrics</button>
+          </div>
+        </div>
+
+        <div class="card panel">
+          <h2>签到日历</h2>
+          <div class="split">
+            <div class="mini">
+              <strong id="next-reward">今日奖励 --</strong>
+              <span id="checkin-state">等待刷新</span>
+            </div>
+            <div class="mini">
+              <strong>Grafana 观察</strong>
+              <span>点击上方动作后，30 秒内看板会出现曲线变化。</span>
+            </div>
+          </div>
+          <div class="calendar" id="calendar"></div>
+        </div>
+
+        <div class="card panel">
+          <h2>Prometheus 样本</h2>
+          <div class="metrics-box" id="metrics">点击“查看 /metrics”加载当前服务指标。</div>
+        </div>
+      </div>
+
+      <aside class="grid">
+        <div class="card panel">
+          <h2>运行日志</h2>
+          <ul class="log" id="log"></ul>
+        </div>
+
+        <div class="card panel">
+          <h2>看板入口</h2>
+          <div class="links">
+            <a href="http://127.0.0.1:3000/d/rewardservice-overview" target="_blank" rel="noreferrer">金币总览</a>
+            <a href="http://127.0.0.1:3000/d/rewardservice-health" target="_blank" rel="noreferrer">服务质量</a>
+            <a href="http://127.0.0.1:9090/targets" target="_blank" rel="noreferrer">Prometheus Targets</a>
+          </div>
+        </div>
+      </aside>
+    </section>
+  </main>
+
+  <script>
+    const sessionKey = 'online-boutique-rewards-demo-session';
+    const state = {
+      sessionId: localStorage.getItem(sessionKey) || `demo-${Date.now()}-${Math.floor(Math.random() * 10000)}`
+    };
+    localStorage.setItem(sessionKey, state.sessionId);
+
+    const $ = (id) => document.getElementById(id);
+
+    function log(message, ok = true) {
+      const item = document.createElement('li');
+      item.className = ok ? 'ok' : 'err';
+      item.textContent = `${new Date().toLocaleTimeString()}  ${message}`;
+      $('log').prepend(item);
+    }
+
+    async function request(path, options = {}) {
+      const res = await fetch(path, {
+        headers: {'Content-Type': 'application/json'},
+        ...options
+      });
+      const text = await res.text();
+      let body = text;
+      try { body = JSON.parse(text); } catch (_) {}
+      if (!res.ok) {
+        const detail = typeof body === 'string' ? body : JSON.stringify(body);
+        throw new Error(`${res.status} ${detail}`);
+      }
+      return body;
+    }
+
+    async function refresh() {
+      $('session-id').textContent = state.sessionId;
+      try {
+        const coins = await request(`/coins/${encodeURIComponent(state.sessionId)}`);
+        $('balance').textContent = coins.balance;
+      } catch (err) {
+        log(`余额刷新失败: ${err.message}`, false);
+      }
+
+      try {
+        const status = await request(`/checkin/status?session_id=${encodeURIComponent(state.sessionId)}`);
+        $('streak').textContent = status.streak;
+        $('next-reward').textContent = `今日奖励 ${status.next_reward} 金币`;
+        $('checkin-state').textContent = status.checked_in ? '今天已经签到' : '今天还没有签到';
+        $('calendar').innerHTML = '';
+        status.calendar.forEach((day) => {
+          const node = document.createElement('div');
+          node.className = `day ${day.checked ? 'checked' : ''}`;
+          node.innerHTML = `<b>${day.date.slice(4, 6)}/${day.date.slice(6)}</b><span>${day.checked ? '已签到' : '待签到'} · ${day.coins} 金币</span>`;
+          $('calendar').appendChild(node);
+        });
+      } catch (err) {
+        log(`签到状态刷新失败: ${err.message}`, false);
+      }
+
+      try {
+        const flash = await request(`/flash/status?session_id=${encodeURIComponent(state.sessionId)}`);
+        $('flash-left').textContent = flash.active ? flash.remaining : '关闭';
+      } catch (err) {
+        $('flash-left').textContent = '--';
+      }
+
+      try {
+        const rush = await request(`/rush/status?session_id=${encodeURIComponent(state.sessionId)}`);
+        $('rush-left').textContent = rush.active ? rush.remaining : '等待';
+      } catch (err) {
+        $('rush-left').textContent = '--';
+      }
+    }
+
+    async function earn(stage) {
+      const adId = `demo-ad-${stage}-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+      const body = await request('/earn', {
+        method: 'POST',
+        body: JSON.stringify({session_id: state.sessionId, ad_id: adId, stage})
+      });
+      log(`广告 stage ${stage} 成功，新增 ${body.coins_added} 金币，余额 ${body.balance}`);
+      await refresh();
+    }
+
+    async function runAction(label, task) {
+      try {
+        await task();
+      } catch (err) {
+        log(`${label} 失败: ${err.message}`, false);
+      }
+    }
+
+    document.querySelectorAll('[data-stage]').forEach((button) => {
+      button.addEventListener('click', () => runAction('广告奖励', () => earn(Number(button.dataset.stage))));
+    });
+
+    $('burst').addEventListener('click', () => runAction('批量造数', async () => {
+      for (let i = 0; i < 5; i += 1) {
+        await earn(3);
+      }
+    }));
+
+    $('checkin').addEventListener('click', () => runAction('签到', async () => {
+      const body = await request('/checkin', {
+        method: 'POST',
+        body: JSON.stringify({session_id: state.sessionId})
+      });
+      log(`签到成功，新增 ${body.coins_added} 金币，连续 ${body.streak} 天`);
+      await refresh();
+    }));
+
+    $('redeem50').addEventListener('click', () => runAction('兑换 9 折券', async () => {
+      const body = await request('/redeem', {
+        method: 'POST',
+        body: JSON.stringify({session_id: state.sessionId, cost: 50})
+      });
+      log(`兑换成功: ${body.coupon_code}，余额 ${body.remaining_balance}`);
+      await refresh();
+    }));
+
+    $('redeem100').addEventListener('click', () => runAction('兑换 8 折券', async () => {
+      const body = await request('/redeem', {
+        method: 'POST',
+        body: JSON.stringify({session_id: state.sessionId, cost: 100})
+      });
+      log(`兑换成功: ${body.coupon_code}，余额 ${body.remaining_balance}`);
+      await refresh();
+    }));
+
+    $('flash').addEventListener('click', () => runAction('秒杀', async () => {
+      const body = await request('/flash/claim', {
+        method: 'POST',
+        body: JSON.stringify({session_id: state.sessionId})
+      });
+      log(`秒杀成功: ${body.coupon_code}，库存 ${body.remaining}`);
+      await refresh();
+    }));
+
+    $('rush').addEventListener('click', () => runAction('整点抢', async () => {
+      const body = await request('/rush/claim', {
+        method: 'POST',
+        body: JSON.stringify({session_id: state.sessionId})
+      });
+      log(`整点抢成功，新增 ${body.coins_added} 金币，库存 ${body.remaining}`);
+      await refresh();
+    }));
+
+    $('refresh').addEventListener('click', () => refresh());
+    $('reset-session').addEventListener('click', () => {
+      localStorage.removeItem(sessionKey);
+      window.location.reload();
+    });
+    $('load-metrics').addEventListener('click', async () => {
+      try {
+        const text = await request('/metrics');
+        $('metrics').textContent = text.split('\n')
+          .filter((line) => /coins_earned|coupon_|checkin_|flash_|rush_|reward_request|redis_pool|ratelimit/.test(line))
+          .slice(0, 80)
+          .join('\n') || '当前还没有匹配的 reward 指标。';
+      } catch (err) {
+        log(`/metrics 加载失败: ${err.message}`, false);
+      }
+    });
+
+    refresh().then(() => log('Demo 页面已连接 rewardservice'));
+  </script>
+</body>
+</html>

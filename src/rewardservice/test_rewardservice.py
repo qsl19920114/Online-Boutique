@@ -187,6 +187,8 @@ class FakeRedis:
             if not coupon:
                 return ["not_found"]
             status = coupon.get("status")
+            # pending 状态：优惠券尚未被 validate 锁定，无需退币直接释放
+            # 只有 locked 状态才会触发退币逻辑
             if status == "pending":
                 return ["ok", "0"]
             if status != "locked":
@@ -280,6 +282,8 @@ class FakeRedis:
 
 
 class FakePipeline:
+    """模拟 Redis pipeline，支持 get / set / hgetall，保持链式调用语义。"""
+
     def __init__(self, redis):
         self.redis = redis
         self.commands = []
@@ -288,11 +292,27 @@ class FakePipeline:
         self.commands.append(("get", key))
         return self
 
+    def set(self, key, value, ex=None):
+        self.commands.append(("set", key, value, ex))
+        return self
+
+    def hgetall(self, key):
+        self.commands.append(("hgetall", key))
+        return self
+
     def execute(self):
         results = []
-        for command, key in self.commands:
-            if command == "get":
-                results.append(self.redis.get(key))
+        for cmd in self.commands:
+            op = cmd[0]
+            if op == "get":
+                results.append(self.redis.get(cmd[1]))
+            elif op == "set":
+                ex = cmd[3] if len(cmd) > 3 else None
+                results.append(self.redis.set(cmd[1], cmd[2], ex=ex))
+            elif op == "hgetall":
+                results.append(self.redis.hgetall(cmd[1]))
+            else:
+                results.append(None)
         return results
 
 
@@ -573,6 +593,15 @@ class RewardServiceTest(unittest.TestCase):
         res = self.client.get("/metrics")
         self.assertIn(b'coupon_redeemed_total{cost="50"}', res.data)
 
+    def test_demo_page_is_available(self):
+        res = self.client.get("/demo")
+
+        self.assertEqual(res.status_code, 200)
+        self.assertIn(b"Rewards Demo", res.data)
+        self.assertIn(b"/earn", res.data)
+        self.assertIn(b"/checkin", res.data)
+        self.assertIn(b"Grafana", res.data)
+
     # ── 金币流水查询 ──────────────────────────────────────────────────────── #
 
     def test_transactions_returns_earn_history(self):
@@ -699,6 +728,141 @@ class RewardServiceTest(unittest.TestCase):
         finally:
             rewardservice._current_flash_slot = original
             rewardservice.FLASH_COST_COINS = 0
+
+
+    # ── 整点抢金币 rush ────────────────────────────────────────────────────── #
+
+    def _patch_rush_time(self, inside: bool):
+        """返回一个 context manager，把 rewardservice.datetime 的 now() 固定到
+        整点后 30 秒（inside=True）或整点后 10 分钟（inside=False）。"""
+        from unittest.mock import patch, MagicMock
+        from datetime import datetime as _real_dt, timezone as _tz
+
+        target_dt = (
+            _real_dt(2024, 1, 1, 14, 0, 30, tzinfo=_tz.utc)   # 整点后 30s，在窗口内
+            if inside
+            else _real_dt(2024, 1, 1, 14, 10, 0, tzinfo=_tz.utc)  # 整点后 10min，窗口外
+        )
+
+        class _FakeDateTime:
+            @classmethod
+            def now(cls, tz=None):
+                return target_dt
+
+            # 保持 replace / strftime 等方法可以在 target_dt 上直接调用
+            def __getattr__(self, name):
+                return getattr(_real_dt, name)
+
+        return patch("rewardservice.datetime", _FakeDateTime)
+
+    def test_rush_status_outside_rush_window(self):
+        """非整点时段，rush_status 应返回 active=False。"""
+        with self._patch_rush_time(inside=False):
+            res = self.client.get("/rush/status?session_id=session-1")
+        self.assertEqual(res.status_code, 200)
+        body = res.get_json()
+        self.assertFalse(body["is_rush_time"])
+        self.assertFalse(body["active"])
+        self.assertGreater(body["next_rush_in_sec"], 0)
+
+    def test_rush_status_inside_rush_window(self):
+        """整点后 30s，rush_status 应返回 active=True 且 remaining 有库存。"""
+        with self._patch_rush_time(inside=True):
+            res = self.client.get("/rush/status?session_id=session-1")
+        self.assertEqual(res.status_code, 200)
+        body = res.get_json()
+        self.assertTrue(body["is_rush_time"])
+        self.assertGreater(body["total"], 0)
+
+    def test_rush_claim_rejected_outside_rush_window(self):
+        """非整点时 rush_claim 应返回 400 not_rush_time。"""
+        with self._patch_rush_time(inside=False):
+            res = self.client.post("/rush/claim", json={"session_id": "session-1"})
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.get_json()["error"], "not_rush_time")
+        self.assertIn("next_rush_in_sec", res.get_json())
+
+    def test_rush_claim_succeeds_during_rush_window(self):
+        """整点窗口内抢金币应成功并返回 coins_added 和 balance。"""
+        with self._patch_rush_time(inside=True):
+            res = self.client.post("/rush/claim", json={"session_id": "session-1"})
+        self.assertEqual(res.status_code, 200)
+        body = res.get_json()
+        self.assertIn("coins_added", body)
+        self.assertGreater(body["coins_added"], 0)
+        self.assertEqual(body["balance"], body["coins_added"])
+
+    def test_rush_claim_already_claimed(self):
+        """同一 session 在同一场次只能抢一次。"""
+        with self._patch_rush_time(inside=True):
+            self.client.post("/rush/claim", json={"session_id": "session-2"})
+            res = self.client.post("/rush/claim", json={"session_id": "session-2"})
+        self.assertEqual(res.status_code, 409)
+        self.assertEqual(res.get_json()["error"], "already_claimed")
+
+    def test_rush_claim_sold_out(self):
+        """池子耗尽后应返回 410 rush_sold_out。"""
+        from datetime import datetime as _real_dt, timezone as _tz
+        with self._patch_rush_time(inside=True):
+            # 先把 pool 设置为 0（已售罄）
+            slot = rewardservice._rush_slot(
+                _real_dt(2024, 1, 1, 14, 0, 30, tzinfo=_tz.utc)
+            )
+            self.redis.set(f"rush:{slot}:remaining", 0, ex=270)
+            res = self.client.post("/rush/claim", json={"session_id": "session-3"})
+        self.assertEqual(res.status_code, 410)
+        self.assertEqual(res.get_json()["error"], "rush_sold_out")
+
+    # ── 百亿补贴 subsidy ──────────────────────────────────────────────────── #
+
+    def test_subsidy_check_known_product(self):
+        """已配置补贴的商品应返回 has_subsidy=True 及折扣信息。"""
+        res = self.client.get("/subsidy/check?product_id=OLJCESPC7Z")
+        self.assertEqual(res.status_code, 200)
+        body = res.get_json()
+        self.assertTrue(body["has_subsidy"])
+        self.assertEqual(body["product_id"], "OLJCESPC7Z")
+        self.assertGreater(body["discount_pct"], 0)
+        self.assertIn("label", body)
+
+    def test_subsidy_check_unknown_product(self):
+        """未配置补贴的商品应返回 has_subsidy=False。"""
+        res = self.client.get("/subsidy/check?product_id=NOTEXIST999")
+        self.assertEqual(res.status_code, 200)
+        body = res.get_json()
+        self.assertFalse(body["has_subsidy"])
+        self.assertEqual(body["product_id"], "NOTEXIST999")
+
+    def test_subsidy_products_list(self):
+        """产品列表应包含所有已配置补贴商品，且每项都有必要字段。"""
+        res = self.client.get("/subsidy/products")
+        self.assertEqual(res.status_code, 200)
+        body = res.get_json()
+        self.assertIn("products", body)
+        self.assertGreater(len(body["products"]), 0)
+        for item in body["products"]:
+            self.assertIn("product_id", item)
+            self.assertIn("discount_pct", item)
+            self.assertIn("label", item)
+
+    # ── 交易流水截断 ──────────────────────────────────────────────────────── #
+
+    def test_transaction_log_capped_at_1000_entries(self):
+        """_record_transaction 使用 ltrim(0,999)，流水条目不应超过 1000。"""
+        # 直接向 Redis 写入 1001 条流水
+        import time as _time
+        key = "txlog:session-cap"
+        for i in range(1001):
+            self.redis.lpush(key, f"{int(_time.time())}:earn:5:ad:ad-{i}")
+            self.redis.ltrim(key, 0, 999)
+        self.assertLessEqual(self.redis.llen(key), 1000)
+
+        # 通过 API 追加一条后仍不超过 1000
+        self.redis.set("coins:session-cap", 0)
+        rewardservice._record_transaction(
+            self.redis, "session-cap", "earn", 5, "ad:overflow-ad"
+        )
+        self.assertLessEqual(self.redis.llen(key), 1000)
 
 
 if __name__ == "__main__":

@@ -10,9 +10,10 @@ echo "====== Online Boutique 部署 ======"
 echo "模式: $MODE | 命名空间: $NAMESPACE"
 
 check_deps() {
-  for cmd in kubectl docker; do
-    command -v $cmd &>/dev/null || { echo "缺少依赖: $cmd"; exit 1; }
-  done
+  command -v kubectl &>/dev/null || { echo "缺少依赖: kubectl"; exit 1; }
+  if [ "$MODE" != "monitor" ]; then
+    command -v docker &>/dev/null || { echo "缺少依赖: docker"; exit 1; }
+  fi
 }
 
 deploy_local() {
@@ -87,36 +88,8 @@ deploy_gke() {
 
 deploy_monitoring() {
   echo "[监控] 部署 Prometheus + Grafana..."
-  kubectl apply -f https://raw.githubusercontent.com/prometheus-operator/prometheus-operator/main/bundle.yaml 2>/dev/null || true
-
-  cat <<EOF | kubectl apply -f -
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: prometheus-config
-  namespace: $NAMESPACE
-data:
-  prometheus.yml: |
-    global:
-      scrape_interval: 15s
-    scrape_configs:
-      - job_name: 'kubernetes-pods'
-        kubernetes_sd_configs:
-          - role: pod
-        relabel_configs:
-          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
-            action: keep
-            regex: true
-          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
-            action: replace
-            target_label: __metrics_path__
-          - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
-            action: replace
-            regex: ([^:]+)(?::\d+)?;(\d+)
-            replacement: \$1:\$2
-            target_label: __address__
-EOF
-  echo "Prometheus 配置完成"
+  MONITORING_NAMESPACE=${MONITORING_NAMESPACE:-"monitoring"}
+  ./scripts/deploy-monitoring.sh --namespace "$MONITORING_NAMESPACE"
 }
 
 check_deps
