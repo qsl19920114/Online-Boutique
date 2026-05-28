@@ -237,7 +237,10 @@ func TestAdTemplateHasWatchSessionRaceGuards(t *testing.T) {
 		"const requestToken = ++modalRequestToken;",
 		"requestToken !== modalRequestToken",
 		"let stageSyncing = false;",
+		"function currentWatchContext()",
+		"function isCurrentWatchContext(context)",
 		"const progressSynced = await sendWatchEvent('timeupdate');",
+		"if (!isCurrentWatchContext(context)) return;",
 		"if (!progressSynced)",
 	} {
 		if !strings.Contains(body, want) {
