@@ -119,7 +119,7 @@ public final class AdService {
   }
 
   private static final String REWARD_VIDEO_URL =
-      "https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4";
+      "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerFun.mp4";
   private static final int REWARD_VIDEO_DURATION_MS = 30000;
   private static final String REWARD_VIDEO_CAMPAIGN_ID = "campaign-reward-video-demo";
   private static final ImmutableListMultimap<String, Ad> adsMap = createAdsMap();

@@ -18,6 +18,9 @@ STAGES = [
 STAGE_COINS = {item["stage"]: item["coins"] for item in STAGES}
 STAGE_TRIGGER_MS = {item["stage"]: item["trigger_sec"] * 1000 for item in STAGES}
 WATCH_SESSION_TTL_SEC = 30 * 60
+WATCH_PROGRESS_GRACE_MS = 2000
+WATCH_MAX_PLAYBACK_RATE = 1.25
+WATCH_FAULT_MAX_DELAY_MS = 5000
 VALID_WATCH_EVENTS = {
     "loadedmetadata",
     "playing",
@@ -43,6 +46,8 @@ EARN_LOG_TTL_SEC = 48 * 60 * 60
 TRANSACTION_TTL_SEC = 30 * 24 * 60 * 60  # 30 days
 DEFAULT_RATELIMITS = {
     "earn": 20,
+    "watch_start": 30,
+    "watch_event": 120,
     "checkin": 5,
     "redeem": 10,
     "coupon": 30,
@@ -50,6 +55,26 @@ DEFAULT_RATELIMITS = {
     "rush": 10,
 }
 RATELIMIT_WINDOW_SEC = 60  # sliding window duration
+KNOWN_AD_IDS = {
+    "ad-hairdryer-001",
+    "ad-tank-top-001",
+    "ad-candle-holder-001",
+    "ad-bamboo-glass-jar-001",
+    "ad-watch-001",
+    "ad-mug-001",
+    "ad-loafers-001",
+}
+KNOWN_CREATIVE_IDS = {
+    "creative-hairdryer-video-001",
+    "creative-tank-top-video-001",
+    "creative-candle-holder-video-001",
+    "creative-bamboo-glass-jar-video-001",
+    "creative-watch-video-001",
+    "creative-mug-video-001",
+    "creative-loafers-video-001",
+}
+KNOWN_CAMPAIGN_IDS = {"campaign-reward-video-demo"}
+KNOWN_ERROR_TYPES = {"unknown", "decode", "network", "media", "timeout", "other"}
 # 秒杀优惠券配置
 FLASH_POOL_SIZE = int(os.getenv("FLASH_POOL_SIZE", "50"))
 FLASH_DURATION_SEC = int(os.getenv("FLASH_DURATION_SEC", "600"))   # 10分钟
@@ -80,6 +105,7 @@ LUA_SCRIPT_NAMES = [
     "ratelimit",
     "flash_claim",
     "rush_claim",
+    "watch_event",
 ]
 
 # ── Prometheus Metrics ──────────────────────────────────────────────────────── #
@@ -333,6 +359,7 @@ def create_app(redis_client=None):
                 "campaign_id": campaign_id,
                 "duration_ms": duration_ms,
                 "max_position_ms": 0,
+                "started_at_ms": _now_ms(),
             },
         )
         app.redis.expire(_watch_key(watch_id), WATCH_SESSION_TTL_SEC)
@@ -365,7 +392,7 @@ def create_app(redis_client=None):
         if event not in VALID_WATCH_EVENTS:
             labels = _watch_labels(ad_id, "", "")
             AD_WATCH_EVENT.labels(
-                event=_safe_label(event), **labels, result="invalid"
+                event="invalid", **labels, result="invalid"
             ).inc()
             return jsonify({"error": "invalid_watch_event"}), 400
         if not session_id or not watch_id or not ad_id:
@@ -383,21 +410,34 @@ def create_app(redis_client=None):
             AD_WATCH_EVENT.labels(event=event, **labels, result="mismatch").inc()
             return jsonify({"error": "watch_session_mismatch"}), 409
 
-        current_max = _int_value(watch.get("max_position_ms"))
+        started_at_ms = _int_value(watch.get("started_at_ms"))
         duration_ms = _int_value(watch.get("duration_ms"))
         bounded_position = min(position_ms, duration_ms) if duration_ms > 0 else position_ms
-        max_position_ms = max(current_max, bounded_position)
-        app.redis.hset(_watch_key(watch_id), mapping={"max_position_ms": max_position_ms})
-        app.redis.expire(_watch_key(watch_id), WATCH_SESSION_TTL_SEC)
+        if not _watch_progress_is_plausible(bounded_position, started_at_ms):
+            AD_WATCH_EVENT.labels(event=event, **labels, result="too_fast").inc()
+            return (
+                jsonify(
+                    {
+                        "error": "watch_progress_too_fast",
+                        "position_ms": bounded_position,
+                    }
+                ),
+                409,
+            )
+        result = _eval_script(
+            app.redis,
+            app.lua["watch_event"],
+            [_watch_key(watch_id)],
+            [bounded_position, event, WATCH_SESSION_TTL_SEC],
+        )
+        max_position_ms = int(result[0])
 
         AD_WATCH_EVENT.labels(event=event, **labels, result="success").inc()
         AD_WATCH_PROGRESS.labels(**labels).observe(max_position_ms / 1000.0)
         if event == "waiting":
             AD_WATCH_REBUFFER.labels(**labels).inc()
         if event == "error":
-            AD_WATCH_ERROR.labels(
-                **labels, error_type=_safe_label(error_type or "unknown")
-            ).inc()
+            AD_WATCH_ERROR.labels(**labels, error_type=_watch_error_label(error_type)).inc()
         return jsonify({"watch_id": watch_id, "max_position_ms": max_position_ms})
 
     @app.post("/earn")
@@ -1008,6 +1048,10 @@ def _rate_limit_endpoint(path, method):
         return None
     if path == "/earn":
         return "earn"
+    if path == "/ads/watch/start":
+        return "watch_start"
+    if path == "/ads/watch/event":
+        return "watch_event"
     if path == "/checkin":
         return "checkin"
     if path == "/redeem":
@@ -1073,6 +1117,10 @@ def _date_string(day):
     return day.strftime("%Y%m%d")
 
 
+def _now_ms():
+    return int(time.time() * 1000)
+
+
 def _new_coupon_code():
     letters = "".join(random.choices(string.ascii_uppercase + string.digits, k=6))
     digits = "".join(random.choices(string.digits, k=4))
@@ -1097,11 +1145,20 @@ def _safe_label(value):
     return "".join(cleaned) or "unknown"
 
 
+def _bounded_label(value, allowed_values):
+    label = _safe_label(value)
+    if label == "unknown":
+        return label
+    if label in allowed_values:
+        return label
+    return "other"
+
+
 def _watch_labels(ad_id, creative_id, campaign_id):
     return {
-        "ad_id": _safe_label(ad_id),
-        "creative_id": _safe_label(creative_id),
-        "campaign_id": _safe_label(campaign_id),
+        "ad_id": _bounded_label(ad_id, KNOWN_AD_IDS),
+        "creative_id": _bounded_label(creative_id, KNOWN_CREATIVE_IDS),
+        "campaign_id": _bounded_label(campaign_id, KNOWN_CAMPAIGN_IDS),
     }
 
 
@@ -1115,6 +1172,20 @@ def _watch_labels_from_hash(watch):
 
 def _watch_key(watch_id):
     return f"ad_watch:{watch_id}"
+
+
+def _watch_progress_is_plausible(position_ms, started_at_ms):
+    if position_ms <= WATCH_PROGRESS_GRACE_MS:
+        return True
+    if started_at_ms <= 0:
+        return False
+    elapsed_ms = max(0, _now_ms() - started_at_ms)
+    allowed_ms = int(elapsed_ms * WATCH_MAX_PLAYBACK_RATE) + WATCH_PROGRESS_GRACE_MS
+    return position_ms <= allowed_ms
+
+
+def _watch_error_label(error_type):
+    return _bounded_label(error_type or "unknown", KNOWN_ERROR_TYPES)
 
 
 def _maybe_inject_watch_fault(path):
@@ -1138,6 +1209,7 @@ def _maybe_inject_watch_fault(path):
         delay_ms = int(os.getenv("REWARD_WATCH_FAULT_DELAY_MS", "0"))
     except ValueError:
         delay_ms = 0
+    delay_ms = max(0, min(delay_ms, WATCH_FAULT_MAX_DELAY_MS))
     if delay_ms > 0:
         time.sleep(delay_ms / 1000.0)
     return None

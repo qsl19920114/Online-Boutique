@@ -70,6 +70,12 @@ class FakeRedis:
     def hget(self, key, field):
         return self.hashes.get(key, {}).get(field)
 
+    def hincrby(self, key, field, amount):
+        current = int(self.hashes.get(key, {}).get(field, "0"))
+        value = current + int(amount)
+        self.hashes.setdefault(key, {})[field] = str(value)
+        return value
+
     def ping(self):
         self.ping_count += 1
         return True
@@ -279,6 +285,24 @@ class FakeRedis:
             self.set(claimed_key, "1", ex=ttl_sec)
             balance = self.incrby(coins_key, coins_per_claim)
             return ["ok", str(coins_per_claim), str(balance), str(new_remaining)]
+        if "-- rewardservice:watch_event" in script:
+            watch_key = keys[0]
+            position_ms = int(args[0])
+            event = args[1]
+            ttl_sec = int(args[2])
+            current = int(self.hget(watch_key, "max_position_ms") or "0")
+            if position_ms > current:
+                current = position_ms
+                self.hset(watch_key, mapping={"max_position_ms": str(current)})
+            self.hset(watch_key, mapping={"last_event": event})
+            if event == "waiting":
+                self.hincrby(watch_key, "rebuffer_count", 1)
+            if event == "error":
+                self.hincrby(watch_key, "error_count", 1)
+            if event == "ended":
+                self.hset(watch_key, mapping={"ended": "1"})
+            self.expire(watch_key, ttl_sec)
+            return [str(current)]
         raise AssertionError("unknown lua script")
 
 
@@ -339,6 +363,7 @@ class RewardServiceTest(unittest.TestCase):
         started = self._start_watch(session_id=session_id, ad_id=ad_id)
         self.assertEqual(started.status_code, 200)
         watch_id = started.get_json()["watch_id"]
+        self._age_watch(watch_id, position_ms + 1000)
         event = self.client.post(
             "/ads/watch/event",
             json={
@@ -351,6 +376,13 @@ class RewardServiceTest(unittest.TestCase):
         )
         self.assertEqual(event.status_code, 200)
         return watch_id
+
+    def _age_watch(self, watch_id, elapsed_ms):
+        started_at = int(__import__("time").time() * 1000) - int(elapsed_ms)
+        self.redis.hset(
+            f"ad_watch:{watch_id}",
+            mapping={"started_at_ms": started_at},
+        )
 
     def _earn(self, session_id="session-1", ad_id="ad-1", stage=1, watch_id=None):
         if watch_id is None:
@@ -409,13 +441,16 @@ class RewardServiceTest(unittest.TestCase):
                 "campaign_id": "campaign-1",
                 "duration_ms": "31000",
                 "max_position_ms": "0",
+                "started_at_ms": watch["started_at_ms"],
             },
         )
+        self.assertGreater(int(watch["started_at_ms"]), 0)
         self.assertEqual(self.redis.ttl(f"ad_watch:{body['watch_id']}"), 30 * 60)
 
     def test_watch_event_validates_match_and_updates_progress_monotonically(self):
         started = self._start_watch()
         watch_id = started.get_json()["watch_id"]
+        self._age_watch(watch_id, 13000)
 
         first = self.client.post(
             "/ads/watch/event",
@@ -492,6 +527,7 @@ class RewardServiceTest(unittest.TestCase):
     def test_earn_rejects_stage_one_when_progress_below_ten_seconds(self):
         started = self._start_watch()
         watch_id = started.get_json()["watch_id"]
+        self._age_watch(watch_id, 10000)
         self.client.post(
             "/ads/watch/event",
             json={
@@ -516,6 +552,24 @@ class RewardServiceTest(unittest.TestCase):
         self.assertEqual(res.status_code, 409)
         self.assertEqual(res.get_json()["error"], "watch_progress_insufficient")
         self.assertEqual(res.get_json()["required_position_ms"], 10000)
+
+    def test_watch_event_rejects_implausibly_fast_progress(self):
+        started = self._start_watch()
+        watch_id = started.get_json()["watch_id"]
+
+        res = self.client.post(
+            "/ads/watch/event",
+            json={
+                "session_id": "session-1",
+                "watch_id": watch_id,
+                "ad_id": "ad-1",
+                "event": "timeupdate",
+                "position_ms": 30000,
+            },
+        )
+
+        self.assertEqual(res.status_code, 409)
+        self.assertEqual(res.get_json()["error"], "watch_progress_too_fast")
 
     def test_earn_allows_stage_one_after_ten_seconds(self):
         watch_id = self._eligible_watch_id(position_ms=10000)
@@ -725,6 +779,36 @@ class RewardServiceTest(unittest.TestCase):
         self.assertEqual(second.status_code, 429)
         self.assertEqual(second.get_json()["error"], "rate_limited")
 
+    def test_watch_start_endpoint_is_rate_limited(self):
+        self.app.config["RATELIMITS"]["watch_start"] = 1
+
+        first = self._start_watch()
+        second = self._start_watch(ad_id="ad-2")
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(second.status_code, 429)
+        self.assertEqual(second.get_json()["error"], "rate_limited")
+
+    def test_watch_event_endpoint_is_rate_limited(self):
+        self.app.config["RATELIMITS"]["watch_event"] = 1
+        started = self._start_watch()
+        watch_id = started.get_json()["watch_id"]
+        self._age_watch(watch_id, 2000)
+        payload = {
+            "session_id": "session-1",
+            "watch_id": watch_id,
+            "ad_id": "ad-1",
+            "event": "timeupdate",
+            "position_ms": 1000,
+        }
+
+        first = self.client.post("/ads/watch/event", json=payload)
+        second = self.client.post("/ads/watch/event", json=payload)
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(second.status_code, 429)
+        self.assertEqual(second.get_json()["error"], "rate_limited")
+
     def test_rate_limit_uses_session_id_not_ip(self):
         """Same session_id from different 'IPs' should still be rate limited."""
         self.app.config["RATELIMITS"]["checkin"] = 1
@@ -824,6 +908,39 @@ class RewardServiceTest(unittest.TestCase):
 
         self.assertIn(b"coin_balance_current", res.data)
         self.assertNotIn(b'coin_balance_current{session_id="', res.data)
+
+    def test_watch_metrics_bucket_unknown_ad_labels(self):
+        started = self._start_watch(
+            ad_id="attacker-ad-unique-123",
+            creative_id="attacker-creative-unique-456",
+            campaign_id="attacker-campaign-unique-789",
+        )
+        watch_id = started.get_json()["watch_id"]
+        self._age_watch(watch_id, 2000)
+        self.client.post(
+            "/ads/watch/event",
+            json={
+                "session_id": "session-1",
+                "watch_id": watch_id,
+                "ad_id": "attacker-ad-unique-123",
+                "event": "timeupdate",
+                "position_ms": 1000,
+            },
+        )
+
+        res = self.client.get("/metrics")
+
+        self.assertIn(b'ad_id="other"', res.data)
+        self.assertNotIn(b"attacker-ad-unique-123", res.data)
+        self.assertNotIn(b"attacker-creative-unique-456", res.data)
+        self.assertNotIn(b"attacker-campaign-unique-789", res.data)
+
+    def test_watch_event_lua_contract_updates_max_atomically(self):
+        self.assertIn("watch_event", rewardservice.LUA_SCRIPT_NAMES)
+        lua = self.app.lua["watch_event"]
+        self.assertIn("-- rewardservice:watch_event", lua)
+        self.assertIn("max_position_ms", lua)
+        self.assertIn("HSET", lua)
 
     def test_metrics_include_redeemed_by_cost(self):
         self.redis.set("coins:session-1", 50)
