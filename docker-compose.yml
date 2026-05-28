@@ -132,7 +132,7 @@ services:
     restart: unless-stopped
 
   adservice:
-    image: us-central1-docker.pkg.dev/google-samples/microservices-demo/adservice:v0.10.2
+    image: online-boutique/adservice:local
     environment:
       - PORT=9555
       - ENABLE_TRACING=0
