@@ -874,6 +874,168 @@ similar to that of the hot-products-row.
   font-weight: normal;
 }
 
+.promotion-panel {
+  margin: 18px 0 24px;
+  padding: 18px;
+  border: 1px solid rgba(154, 160, 166, 0.5);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.promotion-panel-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+
+.promotion-panel-header h3 {
+  margin: 2px 0 0;
+  color: #1E2021;
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.promotion-panel-kicker {
+  display: block;
+  color: #5C6063;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.promotion-balance {
+  flex: 0 0 auto;
+  padding: 5px 10px;
+  border: 1px solid #D7DCE0;
+  border-radius: 999px;
+  color: #1E2021;
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.promotion-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px;
+}
+
+.activity-pill {
+  min-height: 76px;
+  padding: 11px 12px;
+  border: 1px solid #D7DCE0;
+  border-radius: 8px;
+  background: #F6F7F8;
+}
+
+.activity-pill.is-active {
+  border-color: #237A57;
+  background: #EAF6F2;
+}
+
+.activity-pill span {
+  display: block;
+  color: #5C6063;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.activity-pill strong {
+  display: block;
+  margin-top: 3px;
+  color: #1E2021;
+  font-size: 16px;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.activity-pill small {
+  display: block;
+  margin-top: 3px;
+  color: #5C6063;
+  font-size: 12px;
+}
+
+.coupon-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.coupon-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  max-width: 100%;
+  padding: 7px 11px;
+  border: 1px solid #D49B39;
+  border-radius: 999px;
+  background: #FFF7E8;
+  color: #553B00;
+  font-size: 12px;
+  line-height: 1.2;
+}
+
+button.coupon-chip {
+  cursor: pointer;
+}
+
+button.coupon-chip:hover,
+button.coupon-chip:focus {
+  border-color: #9D6C11;
+  background: #FFE6B4;
+  outline: none;
+}
+
+.coupon-chip strong {
+  overflow-wrap: anywhere;
+}
+
+.coupon-chip small {
+  color: #6E4C0A;
+  white-space: nowrap;
+}
+
+.coupon-chip.is-disabled {
+  border-color: #D7DCE0;
+  background: #F6F7F8;
+  color: #6F7377;
+}
+
+.coupon-chip.is-disabled small {
+  color: #6F7377;
+}
+
+.promotion-empty {
+  margin: 8px 0 0;
+  color: #5C6063;
+  font-size: 13px;
+}
+
+.product-promotion-panel {
+  max-width: 520px;
+}
+
+.cart-coupon-tools {
+  padding: 10px 16px 12px;
+  border-top: 1px solid #EEF0F2;
+  background: #fff;
+}
+
+.cart-coupon-strip {
+  margin-top: 8px;
+}
+
+.cymbal-button-primary:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
 @media (max-width: 767px) {
   .reward-ad-wide-card,
   .reward-ad-thank,
@@ -900,6 +1062,28 @@ similar to that of the hot-products-row.
     bottom: 14px;
     width: 64px;
     height: 64px;
+  }
+
+  .promotion-panel {
+    padding: 14px;
+  }
+
+  .promotion-panel-header {
+    display: block;
+  }
+
+  .promotion-balance {
+    display: inline-flex;
+    margin-top: 8px;
+  }
+
+  .promotion-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .coupon-chip {
+    width: 100%;
+    justify-content: space-between;
   }
 }
 

@@ -162,6 +162,8 @@ func main() {
 	r.HandleFunc(baseUrl+"/ads/watch/event", svc.watchAdEventHandler).Methods(http.MethodPost)
 	r.HandleFunc(baseUrl+"/ads/watch", svc.watchAdHandler).Methods(http.MethodPost)
 	r.HandleFunc(baseUrl+"/ads/stage-config", svc.adStageConfigHandler).Methods(http.MethodGet)
+	r.HandleFunc(baseUrl+"/promotion/summary", svc.promotionSummaryHandler).Methods(http.MethodGet)
+	r.HandleFunc(baseUrl+"/coupons", svc.couponsProxyHandler).Methods(http.MethodGet)
 	r.HandleFunc(baseUrl+"/rewards", svc.rewardsPageHandler).Methods(http.MethodGet)
 	r.HandleFunc(baseUrl+"/rewards/redeem", svc.redeemHandler).Methods(http.MethodPost)
 	r.HandleFunc(baseUrl+"/checkin/status", svc.checkInStatusHandler).Methods(http.MethodGet)

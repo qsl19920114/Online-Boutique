@@ -37,6 +37,56 @@
           <p class="product-price">{{ renderMoney $.product.Price }}</p>
           <p>{{ $.product.Item.Description }}</p>
 
+          {{ with $.promotion_summary }}
+          <div class="promotion-panel product-promotion-panel">
+            <div class="promotion-panel-header">
+              <div>
+                <span class="promotion-panel-kicker">Promotion</span>
+                <h3>活动与优惠</h3>
+              </div>
+              <span class="promotion-balance">
+                {{ if ge .CoinBalance 0 }}{{ .CoinBalance }} 金币{{ else }}Rewards offline{{ end }}
+              </span>
+            </div>
+            <div class="promotion-grid">
+              <div class="activity-pill {{ if .Subsidy.Active }}is-active{{ end }}">
+                <span>百亿补贴</span>
+                <strong>{{ if .Subsidy.Active }}{{ .Subsidy.DiscountPct }}% off{{ else }}未命中{{ end }}</strong>
+                {{ if .Subsidy.Label }}<small>{{ .Subsidy.Label }}</small>{{ end }}
+              </div>
+              <div class="activity-pill {{ if .Flash.Active }}is-active{{ end }}">
+                <span>秒杀券</span>
+                <strong>{{ if .Flash.Active }}{{ .Flash.DiscountPct }}% payable{{ else }}待开场{{ end }}</strong>
+                <small>{{ if .Flash.Active }}剩余 {{ .Flash.Remaining }}{{ else }}下一场{{ end }}</small>
+              </div>
+              <div class="activity-pill {{ if .Rush.Active }}is-active{{ end }}">
+                <span>整点抢金币</span>
+                <strong>{{ if .Rush.Active }}+{{ .Rush.Coins }} 金币{{ else }}未开始{{ end }}</strong>
+                <small>{{ if .Rush.Active }}剩余 {{ .Rush.Remaining }}{{ else }}整点开启{{ end }}</small>
+              </div>
+              {{ range .AdRewards }}
+              <div class="activity-pill">
+                <span>看广告 Stage {{ .Stage }}</span>
+                <strong>+{{ .Coins }} 金币</strong>
+                <small>{{ .TriggerSec }} 秒</small>
+              </div>
+              {{ end }}
+            </div>
+            {{ if .OwnedCoupons }}
+            <div class="coupon-strip">
+              {{ range .OwnedCoupons }}
+              <span class="coupon-chip {{ if ne .Status "pending" }}is-disabled{{ end }}">
+                <strong>{{ .Code }}</strong>
+                <small>{{ .DiscountPct }}% payable</small>
+              </span>
+              {{ end }}
+            </div>
+            {{ else }}
+            <p class="promotion-empty">暂无可用券</p>
+            {{ end }}
+          </div>
+          {{ end }}
+
           {{ if $.packagingInfo }}
           <div class="product-packaging">
             <h3>Packaging</h3>

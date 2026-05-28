@@ -203,16 +203,18 @@ func (fe *frontendServer) productHandler(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
+	promotionSummary := fe.promotionSummaryOrFallback(r.Context(), sessionID(r), id)
 	if err := templates.ExecuteTemplate(w, "product", injectCommonTemplateData(r, map[string]interface{}{
-		"ad":              fe.chooseAd(r.Context(), p.Categories, log),
-		"show_currency":   true,
-		"currencies":      currencies,
-		"product":         product,
-		"recommendations": recommendations,
-		"cart_size":       cartSize(cart),
-		"packagingInfo":   packagingInfo,
-		"coin_balance":    fe.rewardBalanceOrDefault(r.Context(), sessionID(r)),
-		"subsidy":         fe.getSubsidyInfo(r.Context(), id),
+		"ad":                fe.chooseAd(r.Context(), p.Categories, log),
+		"show_currency":     true,
+		"currencies":        currencies,
+		"product":           product,
+		"recommendations":   recommendations,
+		"cart_size":         cartSize(cart),
+		"packagingInfo":     packagingInfo,
+		"coin_balance":      promotionSummary.CoinBalance,
+		"promotion_summary": promotionSummary,
+		"subsidy":           promotionSummary.subsidyTemplateData(),
 	})); err != nil {
 		log.Println(err)
 	}
@@ -314,17 +316,19 @@ func (fe *frontendServer) viewCartHandler(w http.ResponseWriter, r *http.Request
 	totalPrice = money.Must(money.Sum(totalPrice, *shippingCost))
 	year := time.Now().Year()
 
+	promotionSummary := fe.promotionSummaryOrFallback(r.Context(), sessionID(r), "")
 	if err := templates.ExecuteTemplate(w, "cart", injectCommonTemplateData(r, map[string]interface{}{
-		"currencies":       currencies,
-		"recommendations":  recommendations,
-		"cart_size":        cartSize(cart),
-		"shipping_cost":    shippingCost,
-		"show_currency":    true,
-		"total_cost":       totalPrice,
-		"items":            items,
-		"expiration_years": []int{year, year + 1, year + 2, year + 3, year + 4},
-		"coin_balance":     fe.rewardBalanceOrDefault(r.Context(), sessionID(r)),
-		"ad":               fe.chooseAd(r.Context(), cartIDs(cart), log),
+		"currencies":        currencies,
+		"recommendations":   recommendations,
+		"cart_size":         cartSize(cart),
+		"shipping_cost":     shippingCost,
+		"show_currency":     true,
+		"total_cost":        totalPrice,
+		"items":             items,
+		"expiration_years":  []int{year, year + 1, year + 2, year + 3, year + 4},
+		"coin_balance":      promotionSummary.CoinBalance,
+		"promotion_summary": promotionSummary,
+		"ad":                fe.chooseAd(r.Context(), cartIDs(cart), log),
 	})); err != nil {
 		log.Println(err)
 	}
@@ -507,6 +511,108 @@ type rewardCheckinResponse struct {
 	Today       string `json:"today"`
 }
 
+type promotionSummary struct {
+	ProductID     string                  `json:"product_id"`
+	CoinBalance   int                     `json:"coin_balance"`
+	Subsidy       promotionSubsidy        `json:"subsidy"`
+	Flash         promotionFlash          `json:"flash"`
+	Rush          promotionRush           `json:"rush"`
+	OwnedCoupons  []promotionCoupon       `json:"owned_coupons"`
+	RedeemOptions []promotionRedeemOption `json:"redeem_options"`
+	AdRewards     []promotionAdReward     `json:"ad_rewards"`
+}
+
+type promotionSubsidy struct {
+	Active      bool   `json:"active"`
+	DiscountPct int    `json:"discount_pct"`
+	Label       string `json:"label"`
+}
+
+type promotionFlash struct {
+	Active      bool   `json:"active"`
+	DiscountPct int    `json:"discount_pct"`
+	CostCoins   int    `json:"cost_coins"`
+	Remaining   int    `json:"remaining"`
+	Source      string `json:"source"`
+}
+
+type promotionRush struct {
+	Active    bool `json:"active"`
+	Coins     int  `json:"coins"`
+	Remaining int  `json:"remaining"`
+}
+
+type promotionCoupon struct {
+	Code        string `json:"code"`
+	DiscountPct int    `json:"discount_pct"`
+	Status      string `json:"status"`
+	Source      string `json:"source"`
+	CostCoins   int    `json:"cost_coins"`
+}
+
+type promotionRedeemOption struct {
+	CostCoins   int  `json:"cost_coins"`
+	DiscountPct int  `json:"discount_pct"`
+	Affordable  bool `json:"affordable"`
+}
+
+type promotionAdReward struct {
+	Stage      int `json:"stage"`
+	TriggerSec int `json:"trigger_sec"`
+	Coins      int `json:"coins"`
+}
+
+type rewardSubsidyResponse struct {
+	HasSubsidy  bool   `json:"has_subsidy"`
+	Active      bool   `json:"active"`
+	DiscountPct int    `json:"discount_pct"`
+	Label       string `json:"label"`
+}
+
+type rewardFlashStatusResponse struct {
+	Active      bool `json:"active"`
+	DiscountPct int  `json:"discount_pct"`
+	CostCoins   int  `json:"cost_coins"`
+	Remaining   int  `json:"remaining"`
+}
+
+type rewardRushStatusResponse struct {
+	Active        bool `json:"active"`
+	Coins         int  `json:"coins"`
+	CoinsPerClaim int  `json:"coins_per_claim"`
+	Remaining     int  `json:"remaining"`
+}
+
+type rewardCouponListResponse struct {
+	SessionID string                 `json:"session_id"`
+	Coupons   []rewardCouponResponse `json:"coupons"`
+	Count     int                    `json:"count"`
+}
+
+type rewardCouponResponse struct {
+	CouponCode  string `json:"coupon_code"`
+	Code        string `json:"code"`
+	DiscountPct int    `json:"discount_pct"`
+	Status      string `json:"status"`
+	Source      string `json:"source"`
+	CostCoins   int    `json:"cost_coins"`
+}
+
+type rewardStageConfigResponse struct {
+	Stages []promotionAdReward `json:"stages"`
+}
+
+func (s promotionSummary) subsidyTemplateData() map[string]interface{} {
+	if !s.Subsidy.Active {
+		return nil
+	}
+	return map[string]interface{}{
+		"has_subsidy":  true,
+		"discount_pct": s.Subsidy.DiscountPct,
+		"label":        s.Subsidy.Label,
+	}
+}
+
 func (fe *frontendServer) watchAdHandler(w http.ResponseWriter, r *http.Request) {
 	var payload struct {
 		AdID    string `json:"ad_id"`
@@ -619,19 +725,66 @@ func (fe *frontendServer) adStageConfigHandler(w http.ResponseWriter, r *http.Re
 	writeJSON(w, out)
 }
 
+func (fe *frontendServer) promotionSummaryHandler(w http.ResponseWriter, r *http.Request) {
+	productID := strings.TrimSpace(r.URL.Query().Get("product_id"))
+	summary, err := fe.getPromotionSummary(r.Context(), sessionID(r), productID)
+	result := "success"
+	if err != nil {
+		result = "failed"
+		summary = fallbackPromotionSummary(productID)
+	}
+	frontendCounterInc(fmt.Sprintf(
+		`promotion_summary_view_total{page="%s",has_product="%t",result="%s"}`,
+		promotionPageMetricLabel(r, productID),
+		productID != "",
+		result,
+	))
+	writeJSON(w, summary)
+}
+
+func (fe *frontendServer) couponsProxyHandler(w http.ResponseWriter, r *http.Request) {
+	sid := sessionID(r)
+	status := strings.TrimSpace(r.URL.Query().Get("status"))
+	path := rewardCouponsPath(sid, status)
+	result, statusCode, err := fe.rewardGetRawWithStatus(r.Context(), path)
+	metricResult := "success"
+	if err != nil || statusCode < http.StatusOK || statusCode >= http.StatusMultipleChoices {
+		metricResult = "failed"
+	}
+	frontendCounterInc(fmt.Sprintf(
+		`coupon_list_proxy_total{page="%s",status="%s",result="%s"}`,
+		pageMetricLabel(r.URL.Query().Get("page")),
+		couponStatusMetricLabel(status),
+		metricResult,
+	))
+	if metricResult == "failed" {
+		writeJSON(w, map[string]interface{}{
+			"session_id": sid,
+			"coupons":    []interface{}{},
+			"count":      0,
+		})
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
+	_, _ = w.Write(result)
+}
+
 func (fe *frontendServer) rewardsPageHandler(w http.ResponseWriter, r *http.Request) {
 	currencies, err := fe.getCurrencies(r.Context())
 	if err != nil {
 		renderHTTPError(log, r, w, errors.Wrap(err, "could not retrieve currencies"), http.StatusInternalServerError)
 		return
 	}
-	balance := fe.rewardBalanceOrDefault(r.Context(), sessionID(r))
-	checkinStatus, _ := fe.getCheckinStatus(r.Context(), sessionID(r))
+	sid := sessionID(r)
+	promotionSummary := fe.promotionSummaryOrFallback(r.Context(), sid, "")
+	checkinStatus, _ := fe.getCheckinStatus(r.Context(), sid)
 	if err := templates.ExecuteTemplate(w, "rewards", injectCommonTemplateData(r, map[string]interface{}{
-		"show_currency":  false,
-		"currencies":     currencies,
-		"coin_balance":   balance,
-		"checkin_status": checkinStatus,
+		"show_currency":     false,
+		"currencies":        currencies,
+		"coin_balance":      promotionSummary.CoinBalance,
+		"promotion_summary": promotionSummary,
+		"checkin_status":    checkinStatus,
 	})); err != nil {
 		log.Println(err)
 	}
@@ -639,10 +792,11 @@ func (fe *frontendServer) rewardsPageHandler(w http.ResponseWriter, r *http.Requ
 
 func (fe *frontendServer) redeemHandler(w http.ResponseWriter, r *http.Request) {
 	frontendCounterInc("coupon_apply_total")
+	sid := sessionID(r)
 	cost, _ := strconv.Atoi(r.FormValue("cost"))
 	var redeemed rewardRedeemResponse
 	err := fe.rewardPost(r.Context(), "/redeem", rewardRedeemRequest{
-		SessionID: sessionID(r),
+		SessionID: sid,
 		Cost:      cost,
 	}, &redeemed)
 	currencies, currencyErr := fe.getCurrencies(r.Context())
@@ -650,18 +804,23 @@ func (fe *frontendServer) redeemHandler(w http.ResponseWriter, r *http.Request) 
 		renderHTTPError(log, r, w, errors.Wrap(currencyErr, "could not retrieve currencies"), http.StatusInternalServerError)
 		return
 	}
+	promotionSummary := fe.promotionSummaryOrFallback(r.Context(), sid, "")
 	payload := map[string]interface{}{
-		"show_currency":  false,
-		"currencies":     currencies,
-		"coin_balance":   fe.rewardBalanceOrDefault(r.Context(), sessionID(r)),
-		"checkin_status": nil,
+		"show_currency":     false,
+		"currencies":        currencies,
+		"coin_balance":      promotionSummary.CoinBalance,
+		"promotion_summary": promotionSummary,
+		"checkin_status":    nil,
 	}
-	payload["checkin_status"], _ = fe.getCheckinStatus(r.Context(), sessionID(r))
+	payload["checkin_status"], _ = fe.getCheckinStatus(r.Context(), sid)
 	if err != nil {
 		payload["redeem_error"] = err.Error()
 	} else {
 		payload["redeemed_coupon"] = redeemed
+		promotionSummary.CoinBalance = redeemed.RemainingBalance
+		promotionSummary.RedeemOptions = defaultPromotionRedeemOptions(redeemed.RemainingBalance)
 		payload["coin_balance"] = redeemed.RemainingBalance
+		payload["promotion_summary"] = promotionSummary
 	}
 	if err := templates.ExecuteTemplate(w, "rewards", injectCommonTemplateData(r, payload)); err != nil {
 		log.Println(err)
@@ -780,6 +939,8 @@ func (fe *frontendServer) metricsHandler(w http.ResponseWriter, r *http.Request)
 	fmt.Fprintln(w, "# TYPE ad_watch_start_proxy_total counter")
 	fmt.Fprintln(w, "# TYPE ad_watch_event_proxy_total counter")
 	fmt.Fprintln(w, "# TYPE ad_watch_reward_proxy_total counter")
+	fmt.Fprintln(w, "# TYPE promotion_summary_view_total counter")
+	fmt.Fprintln(w, "# TYPE coupon_list_proxy_total counter")
 	fmt.Fprintln(w, "# TYPE coupon_apply_total counter")
 	fmt.Fprintln(w, "# TYPE checkout_success_total counter")
 	fmt.Fprintln(w, "# TYPE checkout_failure_total counter")
@@ -835,23 +996,162 @@ func (fe *frontendServer) getSubsidyInfo(ctx context.Context, productID string) 
 	}
 }
 
+func (fe *frontendServer) promotionSummaryOrFallback(ctx context.Context, sessionIDValue, productID string) promotionSummary {
+	summary, err := fe.getPromotionSummary(ctx, sessionIDValue, productID)
+	if err != nil {
+		return fallbackPromotionSummary(productID)
+	}
+	return summary
+}
+
+func (fe *frontendServer) getPromotionSummary(ctx context.Context, sessionIDValue, productID string) (promotionSummary, error) {
+	productID = strings.TrimSpace(productID)
+	summary := promotionSummary{
+		ProductID:     productID,
+		OwnedCoupons:  []promotionCoupon{},
+		AdRewards:     []promotionAdReward{},
+		RedeemOptions: defaultPromotionRedeemOptions(-1),
+	}
+
+	balance, err := fe.getRewardBalance(ctx, sessionIDValue)
+	if err != nil {
+		return promotionSummary{}, err
+	}
+	summary.CoinBalance = balance
+	summary.RedeemOptions = defaultPromotionRedeemOptions(balance)
+
+	var subsidy rewardSubsidyResponse
+	if err := fe.rewardGet(ctx, "/subsidy/check?"+url.Values{"product_id": []string{productID}}.Encode(), &subsidy); err != nil {
+		return promotionSummary{}, err
+	}
+	summary.Subsidy = promotionSubsidy{
+		Active:      subsidy.Active || subsidy.HasSubsidy,
+		DiscountPct: subsidy.DiscountPct,
+		Label:       subsidy.Label,
+	}
+
+	var flash rewardFlashStatusResponse
+	if err := fe.rewardGet(ctx, "/flash/status?"+url.Values{"session_id": []string{sessionIDValue}}.Encode(), &flash); err != nil {
+		return promotionSummary{}, err
+	}
+	summary.Flash = promotionFlash{
+		Active:      flash.Active,
+		DiscountPct: flash.DiscountPct,
+		CostCoins:   flash.CostCoins,
+		Remaining:   flash.Remaining,
+		Source:      "flash",
+	}
+
+	var rush rewardRushStatusResponse
+	if err := fe.rewardGet(ctx, "/rush/status?"+url.Values{"session_id": []string{sessionIDValue}}.Encode(), &rush); err != nil {
+		return promotionSummary{}, err
+	}
+	coins := rush.Coins
+	if coins == 0 {
+		coins = rush.CoinsPerClaim
+	}
+	summary.Rush = promotionRush{
+		Active:    rush.Active,
+		Coins:     coins,
+		Remaining: rush.Remaining,
+	}
+
+	pendingCoupons, err := fe.getRewardCoupons(ctx, sessionIDValue, "pending")
+	if err != nil {
+		return promotionSummary{}, err
+	}
+	lockedCoupons, err := fe.getRewardCoupons(ctx, sessionIDValue, "locked")
+	if err != nil {
+		return promotionSummary{}, err
+	}
+	summary.OwnedCoupons = append(summary.OwnedCoupons, pendingCoupons...)
+	summary.OwnedCoupons = append(summary.OwnedCoupons, lockedCoupons...)
+
+	var adConfig rewardStageConfigResponse
+	if err := fe.rewardGet(ctx, "/ads/stage-config", &adConfig); err != nil {
+		return promotionSummary{}, err
+	}
+	summary.AdRewards = append(summary.AdRewards, adConfig.Stages...)
+
+	return summary, nil
+}
+
+func (fe *frontendServer) getRewardCoupons(ctx context.Context, sessionIDValue, status string) ([]promotionCoupon, error) {
+	var out rewardCouponListResponse
+	if err := fe.rewardGet(ctx, rewardCouponsPath(sessionIDValue, status), &out); err != nil {
+		return nil, err
+	}
+	coupons := make([]promotionCoupon, 0, len(out.Coupons))
+	for _, item := range out.Coupons {
+		code := strings.TrimSpace(item.Code)
+		if code == "" {
+			code = strings.TrimSpace(item.CouponCode)
+		}
+		if code == "" {
+			continue
+		}
+		coupons = append(coupons, promotionCoupon{
+			Code:        code,
+			DiscountPct: item.DiscountPct,
+			Status:      item.Status,
+			Source:      item.Source,
+			CostCoins:   item.CostCoins,
+		})
+	}
+	return coupons, nil
+}
+
+func rewardCouponsPath(sessionIDValue, status string) string {
+	values := url.Values{"session_id": []string{sessionIDValue}}
+	if strings.TrimSpace(status) != "" {
+		values.Set("status", strings.TrimSpace(status))
+	}
+	return "/coupons?" + values.Encode()
+}
+
+func fallbackPromotionSummary(productID string) promotionSummary {
+	return promotionSummary{
+		ProductID:     strings.TrimSpace(productID),
+		CoinBalance:   -1,
+		OwnedCoupons:  []promotionCoupon{},
+		RedeemOptions: defaultPromotionRedeemOptions(-1),
+		AdRewards: []promotionAdReward{
+			{Stage: 1, TriggerSec: 10, Coins: 5},
+			{Stage: 2, TriggerSec: 20, Coins: 12},
+			{Stage: 3, TriggerSec: 30, Coins: 20},
+		},
+	}
+}
+
+func defaultPromotionRedeemOptions(balance int) []promotionRedeemOption {
+	return []promotionRedeemOption{
+		{CostCoins: 50, DiscountPct: 90, Affordable: balance >= 50},
+		{CostCoins: 100, DiscountPct: 80, Affordable: balance >= 100},
+	}
+}
+
 func (fe *frontendServer) rewardGetRaw(ctx context.Context, path string) ([]byte, error) {
+	b, _, err := fe.rewardGetRawWithStatus(ctx, path)
+	return b, err
+}
+
+func (fe *frontendServer) rewardGetRawWithStatus(ctx context.Context, path string) ([]byte, int, error) {
 	reqCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, "http://"+fe.rewardServiceAddr+path, nil)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer resp.Body.Close()
 	b, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, err
+		return nil, resp.StatusCode, err
 	}
-	return b, nil
+	return b, resp.StatusCode, nil
 }
 
 func (fe *frontendServer) rewardPostRaw(ctx context.Context, path string, body []byte) ([]byte, int, error) {
@@ -949,6 +1249,37 @@ func sanitizeMetricLabel(value string) string {
 		return "unknown"
 	}
 	return out.String()
+}
+
+func pageMetricLabel(page string) string {
+	switch strings.ToLower(sanitizeMetricLabel(page)) {
+	case "home", "product", "rewards", "cart", "checkout", "other":
+		return strings.ToLower(sanitizeMetricLabel(page))
+	default:
+		return "other"
+	}
+}
+
+func promotionPageMetricLabel(r *http.Request, productID string) string {
+	page := pageMetricLabel(r.URL.Query().Get("page"))
+	if page != "other" {
+		return page
+	}
+	if strings.TrimSpace(productID) != "" {
+		return "product"
+	}
+	return "other"
+}
+
+func couponStatusMetricLabel(status string) string {
+	switch strings.ToLower(sanitizeMetricLabel(status)) {
+	case "pending", "locked", "used", "expired":
+		return strings.ToLower(sanitizeMetricLabel(status))
+	case "unknown":
+		return "all"
+	default:
+		return "other"
+	}
 }
 
 func watchEventMetricLabel(event string) string {

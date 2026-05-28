@@ -168,6 +168,30 @@
                                 <input type="text" id="coupon_code"
                                     name="coupon_code"
                                     placeholder="COIN-ABC123-0001">
+                                {{ with $.promotion_summary }}
+                                <div class="cart-coupon-tools">
+                                    <span class="promotion-panel-kicker">可用券</span>
+                                    {{ if .OwnedCoupons }}
+                                    <div class="coupon-strip cart-coupon-strip">
+                                        {{ range .OwnedCoupons }}
+                                        {{ if eq .Status "pending" }}
+                                        <button class="coupon-chip" type="button" data-coupon-code="{{ .Code }}">
+                                            <strong>{{ .Code }}</strong>
+                                            <small>{{ .DiscountPct }}% payable</small>
+                                        </button>
+                                        {{ else }}
+                                        <span class="coupon-chip is-disabled">
+                                            <strong>{{ .Code }}</strong>
+                                            <small>{{ .Status }}</small>
+                                        </span>
+                                        {{ end }}
+                                        {{ end }}
+                                    </div>
+                                    {{ else }}
+                                    <p class="promotion-empty">暂无可用券</p>
+                                    {{ end }}
+                                </div>
+                                {{ end }}
                             </div>
                         </div>
 
@@ -236,6 +260,19 @@
         {{ end }} <!-- end if $.items -->
 
     </main>
+
+    <script>
+    (function () {
+        const input = document.getElementById('coupon_code');
+        if (!input) return;
+        document.querySelectorAll('[data-coupon-code]').forEach(function (button) {
+            button.addEventListener('click', function () {
+                input.value = button.getAttribute('data-coupon-code') || '';
+                input.focus();
+            });
+        });
+    })();
+    </script>
 
     {{ if $.recommendations }}
         {{ template "recommendations" $ }}

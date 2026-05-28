@@ -30,6 +30,60 @@
         </div>
         {{ end }}
 
+        {{ with $.promotion_summary }}
+        <div class="promotion-panel rewards-activity-panel">
+            <div class="promotion-panel-header">
+                <div>
+                    <span class="promotion-panel-kicker">Promotion</span>
+                    <h3>当前活动</h3>
+                </div>
+                <span class="promotion-balance">
+                    {{ if ge .CoinBalance 0 }}{{ .CoinBalance }} 金币{{ else }}Rewards offline{{ end }}
+                </span>
+            </div>
+            <div class="promotion-grid">
+                <div class="activity-pill {{ if .Flash.Active }}is-active{{ end }}">
+                    <span>秒杀券</span>
+                    <strong>{{ if .Flash.Active }}{{ .Flash.DiscountPct }}% payable{{ else }}待开场{{ end }}</strong>
+                    <small>{{ if .Flash.Active }}剩余 {{ .Flash.Remaining }}{{ else }}下一场{{ end }}</small>
+                </div>
+                <div class="activity-pill {{ if .Rush.Active }}is-active{{ end }}">
+                    <span>整点抢金币</span>
+                    <strong>{{ if .Rush.Active }}+{{ .Rush.Coins }} 金币{{ else }}未开始{{ end }}</strong>
+                    <small>{{ if .Rush.Active }}剩余 {{ .Rush.Remaining }}{{ else }}整点开启{{ end }}</small>
+                </div>
+                {{ range .AdRewards }}
+                <div class="activity-pill">
+                    <span>广告 Stage {{ .Stage }}</span>
+                    <strong>+{{ .Coins }} 金币</strong>
+                    <small>{{ .TriggerSec }} 秒</small>
+                </div>
+                {{ end }}
+            </div>
+        </div>
+
+        <div class="promotion-panel rewards-coupons-panel">
+            <div class="promotion-panel-header">
+                <div>
+                    <span class="promotion-panel-kicker">Coupons</span>
+                    <h3>我的券</h3>
+                </div>
+            </div>
+            {{ if .OwnedCoupons }}
+            <div class="coupon-strip">
+                {{ range .OwnedCoupons }}
+                <span class="coupon-chip {{ if ne .Status "pending" }}is-disabled{{ end }}">
+                    <strong>{{ .Code }}</strong>
+                    <small>{{ .DiscountPct }}% payable</small>
+                </span>
+                {{ end }}
+            </div>
+            {{ else }}
+            <p class="promotion-empty">暂无优惠券</p>
+            {{ end }}
+        </div>
+        {{ end }}
+
         {{ if $.redeem_error }}
         <div class="reward-alert">{{ $.redeem_error }}</div>
         {{ end }}
@@ -43,6 +97,16 @@
         {{ end }}
 
         <div class="reward-redemption-grid">
+            {{ if $.promotion_summary }}
+            {{ range $.promotion_summary.RedeemOptions }}
+            <form method="POST" action="{{ $.baseUrl }}/rewards/redeem" class="reward-redemption-card">
+                <input type="hidden" name="cost" value="{{ .CostCoins }}">
+                <h4>{{ .DiscountPct }} percent payable coupon</h4>
+                <p>Costs {{ .CostCoins }} coins.</p>
+                <button class="cymbal-button-primary" type="submit" {{ if not .Affordable }}disabled{{ end }}>Redeem</button>
+            </form>
+            {{ end }}
+            {{ else }}
             <form method="POST" action="{{ $.baseUrl }}/rewards/redeem" class="reward-redemption-card">
                 <input type="hidden" name="cost" value="50">
                 <h4>90 percent payable coupon</h4>
@@ -55,6 +119,7 @@
                 <p>Costs 100 coins.</p>
                 <button class="cymbal-button-primary" type="submit">Redeem</button>
             </form>
+            {{ end }}
         </div>
     </section>
 </main>
