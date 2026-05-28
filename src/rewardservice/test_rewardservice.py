@@ -322,6 +322,48 @@ class RewardServiceTest(unittest.TestCase):
         self.app = rewardservice.create_app(redis_client=self.redis)
         self.client = self.app.test_client()
 
+    def _start_watch(self, session_id="session-1", ad_id="ad-1", creative_id="creative-1", campaign_id="campaign-1", duration_ms=30000):
+        return self.client.post(
+            "/ads/watch/start",
+            json={
+                "session_id": session_id,
+                "ad_id": ad_id,
+                "creative_id": creative_id,
+                "campaign_id": campaign_id,
+                "duration_ms": duration_ms,
+            },
+        )
+
+    def _eligible_watch_id(self, session_id="session-1", ad_id="ad-1", position_ms=10000):
+        started = self._start_watch(session_id=session_id, ad_id=ad_id)
+        self.assertEqual(started.status_code, 200)
+        watch_id = started.get_json()["watch_id"]
+        event = self.client.post(
+            "/ads/watch/event",
+            json={
+                "session_id": session_id,
+                "watch_id": watch_id,
+                "ad_id": ad_id,
+                "event": "timeupdate",
+                "position_ms": position_ms,
+            },
+        )
+        self.assertEqual(event.status_code, 200)
+        return watch_id
+
+    def _earn(self, session_id="session-1", ad_id="ad-1", stage=1, watch_id=None):
+        if watch_id is None:
+            watch_id = self._eligible_watch_id(session_id=session_id, ad_id=ad_id)
+        return self.client.post(
+            "/earn",
+            json={
+                "session_id": session_id,
+                "ad_id": ad_id,
+                "stage": stage,
+                "watch_id": watch_id,
+            },
+        )
+
     def test_coin_balance_defaults_to_zero(self):
         res = self.client.get("/coins/session-1")
         self.assertEqual(res.status_code, 200)
@@ -342,10 +384,150 @@ class RewardServiceTest(unittest.TestCase):
             },
         )
 
-    def test_earn_adds_stage_coins_and_sets_cooldown(self):
-        res = self.client.post(
-            "/earn", json={"session_id": "session-1", "ad_id": "ad-1", "stage": 2}
+    def test_watch_start_creates_session_hash_and_returns_config(self):
+        res = self._start_watch(
+            session_id="session-1",
+            ad_id="ad-1",
+            creative_id="creative-1",
+            campaign_id="campaign-1",
+            duration_ms=31000,
         )
+
+        self.assertEqual(res.status_code, 200)
+        body = res.get_json()
+        self.assertRegex(body["watch_id"], r"^[A-Za-z0-9_-]{24}$")
+        self.assertEqual(body["expires_in_sec"], 30 * 60)
+        self.assertEqual(body["stages"], rewardservice.STAGES)
+        watch = self.redis.hgetall(f"ad_watch:{body['watch_id']}")
+        self.assertEqual(
+            watch,
+            {
+                "session_id": "session-1",
+                "ad_id": "ad-1",
+                "creative_id": "creative-1",
+                "campaign_id": "campaign-1",
+                "duration_ms": "31000",
+                "max_position_ms": "0",
+            },
+        )
+        self.assertEqual(self.redis.ttl(f"ad_watch:{body['watch_id']}"), 30 * 60)
+
+    def test_watch_event_validates_match_and_updates_progress_monotonically(self):
+        started = self._start_watch()
+        watch_id = started.get_json()["watch_id"]
+
+        first = self.client.post(
+            "/ads/watch/event",
+            json={
+                "session_id": "session-1",
+                "watch_id": watch_id,
+                "ad_id": "ad-1",
+                "event": "timeupdate",
+                "position_ms": 12000,
+            },
+        )
+        second = self.client.post(
+            "/ads/watch/event",
+            json={
+                "session_id": "session-1",
+                "watch_id": watch_id,
+                "ad_id": "ad-1",
+                "event": "timeupdate",
+                "position_ms": 7000,
+            },
+        )
+        mismatch = self.client.post(
+            "/ads/watch/event",
+            json={
+                "session_id": "session-2",
+                "watch_id": watch_id,
+                "ad_id": "ad-1",
+                "event": "timeupdate",
+                "position_ms": 13000,
+            },
+        )
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(first.get_json()["max_position_ms"], 12000)
+        self.assertEqual(second.status_code, 200)
+        self.assertEqual(second.get_json()["max_position_ms"], 12000)
+        self.assertEqual(mismatch.status_code, 409)
+        self.assertEqual(mismatch.get_json()["error"], "watch_session_mismatch")
+        self.assertEqual(
+            self.redis.hgetall(f"ad_watch:{watch_id}")["max_position_ms"], "12000"
+        )
+
+    def test_earn_requires_known_matching_watch_id(self):
+        missing = self.client.post(
+            "/earn", json={"session_id": "session-1", "ad_id": "ad-1", "stage": 1}
+        )
+        unknown = self.client.post(
+            "/earn",
+            json={
+                "session_id": "session-1",
+                "ad_id": "ad-1",
+                "stage": 1,
+                "watch_id": "missing-watch",
+            },
+        )
+        started = self._start_watch(session_id="session-1", ad_id="ad-1")
+        mismatched = self.client.post(
+            "/earn",
+            json={
+                "session_id": "session-2",
+                "ad_id": "ad-1",
+                "stage": 1,
+                "watch_id": started.get_json()["watch_id"],
+            },
+        )
+
+        self.assertEqual(missing.status_code, 400)
+        self.assertEqual(missing.get_json()["error"], "watch_id is required")
+        self.assertEqual(unknown.status_code, 404)
+        self.assertEqual(unknown.get_json()["error"], "watch_session_not_found")
+        self.assertEqual(mismatched.status_code, 409)
+        self.assertEqual(mismatched.get_json()["error"], "watch_session_mismatch")
+
+    def test_earn_rejects_stage_one_when_progress_below_ten_seconds(self):
+        started = self._start_watch()
+        watch_id = started.get_json()["watch_id"]
+        self.client.post(
+            "/ads/watch/event",
+            json={
+                "session_id": "session-1",
+                "watch_id": watch_id,
+                "ad_id": "ad-1",
+                "event": "timeupdate",
+                "position_ms": 9999,
+            },
+        )
+
+        res = self.client.post(
+            "/earn",
+            json={
+                "session_id": "session-1",
+                "ad_id": "ad-1",
+                "stage": 1,
+                "watch_id": watch_id,
+            },
+        )
+
+        self.assertEqual(res.status_code, 409)
+        self.assertEqual(res.get_json()["error"], "watch_progress_insufficient")
+        self.assertEqual(res.get_json()["required_position_ms"], 10000)
+
+    def test_earn_allows_stage_one_after_ten_seconds(self):
+        watch_id = self._eligible_watch_id(position_ms=10000)
+
+        res = self._earn(stage=1, watch_id=watch_id)
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.get_json()["coins_added"], 5)
+        self.assertEqual(res.get_json()["balance"], 5)
+
+    def test_earn_adds_stage_coins_and_sets_cooldown(self):
+        watch_id = self._eligible_watch_id(position_ms=20000)
+        res = self._earn(stage=2, watch_id=watch_id)
 
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.get_json()["coins_added"], 12)
@@ -354,12 +536,9 @@ class RewardServiceTest(unittest.TestCase):
         self.assertEqual(self.redis.ttl("cooldown:session-1:ad-1"), 300)
 
     def test_earn_rejects_duplicate_ad_during_cooldown(self):
-        self.client.post(
-            "/earn", json={"session_id": "session-1", "ad_id": "ad-1", "stage": 1}
-        )
-        res = self.client.post(
-            "/earn", json={"session_id": "session-1", "ad_id": "ad-1", "stage": 3}
-        )
+        self._earn(stage=1)
+        watch_id = self._eligible_watch_id(position_ms=30000)
+        res = self._earn(stage=3, watch_id=watch_id)
 
         self.assertEqual(res.status_code, 429)
         self.assertEqual(res.get_json()["cooldown_remaining_sec"], 300)
@@ -537,12 +716,9 @@ class RewardServiceTest(unittest.TestCase):
     def test_write_endpoint_is_rate_limited(self):
         self.app.config["RATELIMITS"]["earn"] = 1
 
-        first = self.client.post(
-            "/earn", json={"session_id": "session-1", "ad_id": "ad-1", "stage": 1}
-        )
-        second = self.client.post(
-            "/earn", json={"session_id": "session-1", "ad_id": "ad-2", "stage": 1}
-        )
+        first = self._earn()
+        watch_id = self._eligible_watch_id(ad_id="ad-2")
+        second = self._earn(ad_id="ad-2", watch_id=watch_id)
 
         self.assertEqual(first.status_code, 200)
         self.assertEqual(second.status_code, 429)
@@ -581,11 +757,20 @@ class RewardServiceTest(unittest.TestCase):
         self.assertIn(b"coupon_cancelled_total", res.data)
 
     def test_metrics_include_earned_by_source(self):
-        self.client.post(
-            "/earn", json={"session_id": "s1", "ad_id": "ad-1", "stage": 1}
-        )
+        self._earn(session_id="s1")
         res = self.client.get("/metrics")
         self.assertIn(b'coins_earned_total{source="ad"}', res.data)
+
+    def test_metrics_include_watch_and_claim_counters(self):
+        watch_id = self._eligible_watch_id()
+        self._earn(watch_id=watch_id)
+
+        res = self.client.get("/metrics")
+
+        self.assertIn(b"ad_watch_session_started_total", res.data)
+        self.assertIn(b"ad_watch_event_total", res.data)
+        self.assertIn(b"ad_watch_progress_seconds", res.data)
+        self.assertIn(b"ad_reward_claim_total", res.data)
 
     def test_metrics_include_redeemed_by_cost(self):
         self.redis.set("coins:session-1", 50)
@@ -605,9 +790,7 @@ class RewardServiceTest(unittest.TestCase):
     # ── 金币流水查询 ──────────────────────────────────────────────────────── #
 
     def test_transactions_returns_earn_history(self):
-        self.client.post(
-            "/earn", json={"session_id": "session-1", "ad_id": "ad-1", "stage": 1}
-        )
+        self._earn()
 
         res = self.client.get("/coins/session-1/transactions")
         self.assertEqual(res.status_code, 200)
@@ -632,10 +815,8 @@ class RewardServiceTest(unittest.TestCase):
     def test_transactions_pagination(self):
         self.redis.set("coins:session-1", 500)
         for i in range(3):
-            self.client.post(
-                "/earn",
-                json={"session_id": "session-1", "ad_id": f"ad-{i}", "stage": 1},
-            )
+            watch_id = self._eligible_watch_id(ad_id=f"ad-{i}")
+            self._earn(ad_id=f"ad-{i}", watch_id=watch_id)
 
         res = self.client.get("/coins/session-1/transactions?page=1&size=2")
         body = res.get_json()
@@ -696,8 +877,15 @@ class RewardServiceTest(unittest.TestCase):
             coupon = self.redis.hgetall(f"coupon:{body['coupon_code']}")
             self.assertEqual(coupon["status"], "pending")
             self.assertEqual(coupon["source"], "flash")
+            self.assertEqual(coupon["cost_coins"], str(rewardservice.FLASH_COST_COINS))
         finally:
             rewardservice._current_flash_slot = original
+
+    def test_flash_claim_lua_contract_includes_cost_coins(self):
+        with open("lua/flash_claim.lua", encoding="utf-8") as lua_file:
+            lua = lua_file.read()
+        self.assertIn('"cost_coins"', lua)
+        self.assertIn("cost_coins", lua)
 
     # ── cancel refund for flash coupon ────────────────────────────────────── #
 

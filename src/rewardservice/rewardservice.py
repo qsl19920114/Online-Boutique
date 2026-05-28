@@ -16,6 +16,18 @@ STAGES = [
     {"stage": 3, "trigger_sec": 30, "coins": 20},
 ]
 STAGE_COINS = {item["stage"]: item["coins"] for item in STAGES}
+STAGE_TRIGGER_MS = {item["stage"]: item["trigger_sec"] * 1000 for item in STAGES}
+WATCH_SESSION_TTL_SEC = 30 * 60
+VALID_WATCH_EVENTS = {
+    "loadedmetadata",
+    "playing",
+    "timeupdate",
+    "waiting",
+    "ended",
+    "error",
+    "pause",
+    "resume",
+}
 COOLDOWN_SEC = 300
 COUPON_TTL_SEC = 7 * 24 * 60 * 60
 COUPON_RULES = {
@@ -109,6 +121,41 @@ FLASH_CLAIMED = Counter("flash_sale_claimed_total", "Flash sale coupons claimed.
 FLASH_SOLD_OUT = Counter("flash_sale_sold_out_total", "Flash sale sold-out rejections.")
 RUSH_CLAIMED = Counter("rush_claimed_total", "On-the-hour coin rush claims.")
 RUSH_SOLD_OUT = Counter("rush_sold_out_total", "Rush sold-out rejections.")
+AD_WATCH_SESSION_STARTED = Counter(
+    "ad_watch_session_started_total",
+    "Video ad watch sessions started.",
+    ["ad_id", "creative_id", "campaign_id", "result"],
+)
+AD_WATCH_EVENT = Counter(
+    "ad_watch_event_total",
+    "Video ad watch events received.",
+    ["event", "ad_id", "creative_id", "campaign_id", "result"],
+)
+AD_WATCH_PROGRESS = Histogram(
+    "ad_watch_progress_seconds",
+    "Maximum verified video ad watch progress.",
+    ["ad_id", "creative_id", "campaign_id"],
+)
+AD_WATCH_REBUFFER = Counter(
+    "ad_watch_rebuffer_total",
+    "Video ad rebuffer events.",
+    ["ad_id", "creative_id", "campaign_id"],
+)
+AD_WATCH_ERROR = Counter(
+    "ad_watch_error_total",
+    "Video ad playback errors.",
+    ["ad_id", "creative_id", "campaign_id", "error_type"],
+)
+AD_REWARD_CLAIM = Counter(
+    "ad_reward_claim_total",
+    "Video ad reward claim attempts.",
+    ["ad_id", "creative_id", "campaign_id", "stage", "result"],
+)
+AD_WATCH_FAULT_INJECTED = Counter(
+    "ad_watch_fault_injected_total",
+    "Injected RewardService watch path faults.",
+    ["mode", "path"],
+)
 
 
 def create_app(redis_client=None):
@@ -242,12 +289,127 @@ def create_app(redis_client=None):
 
     # ── 看广告赚金币 ──────────────────────────────────────────────────────── #
 
-    @app.post("/earn")
-    @timed("earn")
-    def earn():
+    @app.post("/ads/watch/start")
+    @timed("ad_watch_start")
+    def watch_start():
+        fault = _maybe_inject_watch_fault("/ads/watch/start")
+        if fault is not None:
+            return fault
         payload = request.get_json(silent=True) or {}
         session_id = str(payload.get("session_id", "")).strip()
         ad_id = str(payload.get("ad_id", "")).strip()
+        creative_id = str(payload.get("creative_id", "")).strip()
+        campaign_id = str(payload.get("campaign_id", "")).strip()
+        try:
+            duration_ms = int(payload.get("duration_ms"))
+        except (TypeError, ValueError):
+            duration_ms = 0
+
+        labels = _watch_labels(ad_id, creative_id, campaign_id)
+        if not session_id or not ad_id or not creative_id or not campaign_id:
+            AD_WATCH_SESSION_STARTED.labels(**labels, result="invalid").inc()
+            return (
+                jsonify(
+                    {
+                        "error": (
+                            "session_id, ad_id, creative_id, and campaign_id "
+                            "are required"
+                        )
+                    }
+                ),
+                400,
+            )
+        if duration_ms <= 0:
+            AD_WATCH_SESSION_STARTED.labels(**labels, result="invalid").inc()
+            return jsonify({"error": "duration_ms must be positive"}), 400
+
+        watch_id = _new_watch_id()
+        app.redis.hset(
+            _watch_key(watch_id),
+            mapping={
+                "session_id": session_id,
+                "ad_id": ad_id,
+                "creative_id": creative_id,
+                "campaign_id": campaign_id,
+                "duration_ms": duration_ms,
+                "max_position_ms": 0,
+            },
+        )
+        app.redis.expire(_watch_key(watch_id), WATCH_SESSION_TTL_SEC)
+        AD_WATCH_SESSION_STARTED.labels(**labels, result="success").inc()
+        return jsonify(
+            {
+                "watch_id": watch_id,
+                "expires_in_sec": WATCH_SESSION_TTL_SEC,
+                "stages": STAGES,
+            }
+        )
+
+    @app.post("/ads/watch/event")
+    @timed("ad_watch_event")
+    def watch_event():
+        fault = _maybe_inject_watch_fault("/ads/watch/event")
+        if fault is not None:
+            return fault
+        payload = request.get_json(silent=True) or {}
+        session_id = str(payload.get("session_id", "")).strip()
+        watch_id = str(payload.get("watch_id", "")).strip()
+        ad_id = str(payload.get("ad_id", "")).strip()
+        event = str(payload.get("event", "")).strip()
+        error_type = str(payload.get("error_type", "")).strip()
+        try:
+            position_ms = max(0, int(payload.get("position_ms", 0)))
+        except (TypeError, ValueError):
+            return jsonify({"error": "position_ms must be an integer"}), 400
+
+        if event not in VALID_WATCH_EVENTS:
+            labels = _watch_labels(ad_id, "", "")
+            AD_WATCH_EVENT.labels(
+                event=_safe_label(event), **labels, result="invalid"
+            ).inc()
+            return jsonify({"error": "invalid_watch_event"}), 400
+        if not session_id or not watch_id or not ad_id:
+            labels = _watch_labels(ad_id, "", "")
+            AD_WATCH_EVENT.labels(event=event, **labels, result="invalid").inc()
+            return jsonify({"error": "session_id, watch_id, and ad_id are required"}), 400
+
+        watch = app.redis.hgetall(_watch_key(watch_id))
+        if not watch:
+            labels = _watch_labels(ad_id, "", "")
+            AD_WATCH_EVENT.labels(event=event, **labels, result="not_found").inc()
+            return jsonify({"error": "watch_session_not_found"}), 404
+        labels = _watch_labels_from_hash(watch)
+        if watch.get("session_id") != session_id or watch.get("ad_id") != ad_id:
+            AD_WATCH_EVENT.labels(event=event, **labels, result="mismatch").inc()
+            return jsonify({"error": "watch_session_mismatch"}), 409
+
+        current_max = _int_value(watch.get("max_position_ms"))
+        duration_ms = _int_value(watch.get("duration_ms"))
+        bounded_position = min(position_ms, duration_ms) if duration_ms > 0 else position_ms
+        max_position_ms = max(current_max, bounded_position)
+        app.redis.hset(_watch_key(watch_id), mapping={"max_position_ms": max_position_ms})
+        app.redis.expire(_watch_key(watch_id), WATCH_SESSION_TTL_SEC)
+
+        AD_WATCH_EVENT.labels(event=event, **labels, result="success").inc()
+        AD_WATCH_PROGRESS.labels(**labels).observe(max_position_ms / 1000.0)
+        if event == "waiting":
+            AD_WATCH_REBUFFER.labels(**labels).inc()
+        if event == "error":
+            AD_WATCH_ERROR.labels(
+                **labels, error_type=_safe_label(error_type or "unknown")
+            ).inc()
+        return jsonify({"watch_id": watch_id, "max_position_ms": max_position_ms})
+
+    @app.post("/earn")
+    @timed("earn")
+    def earn():
+        fault = _maybe_inject_watch_fault("/earn")
+        if fault is not None:
+            return fault
+        payload = request.get_json(silent=True) or {}
+        session_id = str(payload.get("session_id", "")).strip()
+        ad_id = str(payload.get("ad_id", "")).strip()
+        watch_id = str(payload.get("watch_id", "")).strip()
         stage = payload.get("stage")
         if not session_id or not ad_id:
             return jsonify({"error": "session_id and ad_id are required"}), 400
@@ -257,6 +419,43 @@ def create_app(redis_client=None):
             return jsonify({"error": "stage must be 1, 2, or 3"}), 400
         if stage not in STAGE_COINS:
             return jsonify({"error": "stage must be 1, 2, or 3"}), 400
+        if not watch_id:
+            labels = _watch_labels(ad_id, "", "")
+            AD_REWARD_CLAIM.labels(
+                **labels, stage=str(stage), result="missing_watch_id"
+            ).inc()
+            return jsonify({"error": "watch_id is required"}), 400
+
+        watch = app.redis.hgetall(_watch_key(watch_id))
+        if not watch:
+            labels = _watch_labels(ad_id, "", "")
+            AD_REWARD_CLAIM.labels(
+                **labels, stage=str(stage), result="not_found"
+            ).inc()
+            return jsonify({"error": "watch_session_not_found"}), 404
+        labels = _watch_labels_from_hash(watch)
+        if watch.get("session_id") != session_id or watch.get("ad_id") != ad_id:
+            AD_REWARD_CLAIM.labels(
+                **labels, stage=str(stage), result="mismatch"
+            ).inc()
+            return jsonify({"error": "watch_session_mismatch"}), 409
+
+        max_position_ms = _int_value(watch.get("max_position_ms"))
+        required_position_ms = STAGE_TRIGGER_MS[stage]
+        if max_position_ms < required_position_ms:
+            AD_REWARD_CLAIM.labels(
+                **labels, stage=str(stage), result="progress_insufficient"
+            ).inc()
+            return (
+                jsonify(
+                    {
+                        "error": "watch_progress_insufficient",
+                        "required_position_ms": required_position_ms,
+                        "max_position_ms": max_position_ms,
+                    }
+                ),
+                409,
+            )
 
         coins_to_add = STAGE_COINS[stage]
         today = _today_string()
@@ -279,6 +478,7 @@ def create_app(redis_client=None):
         )
         status_name = result[0]
         if status_name == "cooldown":
+            AD_REWARD_CLAIM.labels(**labels, stage=str(stage), result="cooldown").inc()
             COOLDOWN_REJECTED.inc()
             remaining = int(result[1])
             return (
@@ -291,6 +491,7 @@ def create_app(redis_client=None):
                 429,
             )
         if status_name == "duplicate":
+            AD_REWARD_CLAIM.labels(**labels, stage=str(stage), result="duplicate").inc()
             return (
                 jsonify(
                     {
@@ -302,6 +503,7 @@ def create_app(redis_client=None):
             )
 
         balance = int(result[1])
+        AD_REWARD_CLAIM.labels(**labels, stage=str(stage), result="success").inc()
         COINS_EARNED.labels(source="ad").inc(coins_to_add)
         COIN_BALANCE.labels(session_id=session_id).set(balance)
         # 记录交易流水
@@ -877,6 +1079,70 @@ def _new_coupon_code():
     letters = "".join(random.choices(string.ascii_uppercase + string.digits, k=6))
     digits = "".join(random.choices(string.digits, k=4))
     return f"COIN-{letters}-{digits}"
+
+
+def _new_watch_id():
+    alphabet = string.ascii_letters + string.digits + "_-"
+    return "".join(random.choices(alphabet, k=24))
+
+
+def _safe_label(value):
+    text = str(value or "unknown").strip()
+    if not text:
+        return "unknown"
+    cleaned = []
+    for char in text[:64]:
+        if char.isalnum() or char in ("_", "-", "."):
+            cleaned.append(char)
+        else:
+            cleaned.append("_")
+    return "".join(cleaned) or "unknown"
+
+
+def _watch_labels(ad_id, creative_id, campaign_id):
+    return {
+        "ad_id": _safe_label(ad_id),
+        "creative_id": _safe_label(creative_id),
+        "campaign_id": _safe_label(campaign_id),
+    }
+
+
+def _watch_labels_from_hash(watch):
+    return _watch_labels(
+        watch.get("ad_id", ""),
+        watch.get("creative_id", ""),
+        watch.get("campaign_id", ""),
+    )
+
+
+def _watch_key(watch_id):
+    return f"ad_watch:{watch_id}"
+
+
+def _maybe_inject_watch_fault(path):
+    mode = os.getenv("REWARD_WATCH_FAULT_MODE", "none").strip().lower()
+    if mode not in ("error", "delay"):
+        return None
+    try:
+        rate = float(os.getenv("REWARD_WATCH_FAULT_RATE", "0"))
+    except ValueError:
+        rate = 0.0
+    rate = max(0.0, min(1.0, rate))
+    if rate <= 0.0 or random.random() > rate:
+        return None
+
+    labels = {"mode": _safe_label(mode), "path": _safe_label(path)}
+    AD_WATCH_FAULT_INJECTED.labels(**labels).inc()
+    if mode == "error":
+        return jsonify({"error": "watch_fault_injected"}), 503
+
+    try:
+        delay_ms = int(os.getenv("REWARD_WATCH_FAULT_DELAY_MS", "0"))
+    except ValueError:
+        delay_ms = 0
+    if delay_ms > 0:
+        time.sleep(delay_ms / 1000.0)
+    return None
 
 
 def _coins_key(session_id):

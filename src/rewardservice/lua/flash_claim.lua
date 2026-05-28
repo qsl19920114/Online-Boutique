@@ -50,7 +50,8 @@ redis.call("HSET", coupon_key,
   "session_id",   session_id,
   "status",       "pending",
   "created_at",   created_at,
-  "source",       "flash"
+  "source",       "flash",
+  "cost_coins",   tostring(cost_coins)
 )
 redis.call("EXPIRE", coupon_key, coupon_ttl_sec)
 return {"ok", tostring(new_remaining), coupon_code}
