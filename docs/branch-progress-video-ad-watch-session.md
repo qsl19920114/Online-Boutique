@@ -22,6 +22,8 @@
    - 新增 `POST /ads/watch/start` 创建 `watch_id`。
    - 新增 `POST /ads/watch/event` 记录播放事件、最大观看进度、卡顿、错误、结束状态。
    - `/earn` 必须携带 `watch_id`，并校验对应 stage 的观看进度。
+   - RewardService 校验广告 ID、素材 ID、活动 ID 必须匹配已知视频广告组合。
+   - `watch_id` 成功领奖后会被标记为已领取，单次观看会话只能产生一次奖励。
    - 观看进度更新通过 Lua 原子脚本完成，避免并发下最大进度回退。
    - 增加播放进度合理性校验，防止瞬间伪造 10s/20s/30s 观看进度。
    - Watch start/event/earn 纳入限流与 Chaos 注入链路。
@@ -65,7 +67,7 @@
 已运行并通过：
 
 ```bash
-cd src/rewardservice && python3 -m unittest test_rewardservice.py
+cd src/rewardservice && python3 -m unittest test_rewardservice.py  # 53 tests
 cd src/frontend && go test -count=1 ./...
 PYTHONPYCACHEPREFIX=/tmp/online-boutique-pycache python3 -m py_compile src/loadgenerator/locustfile.py
 python3 -m json.tool docs/grafana/ad-video-stability.json

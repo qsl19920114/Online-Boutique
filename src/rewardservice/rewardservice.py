@@ -55,25 +55,46 @@ DEFAULT_RATELIMITS = {
     "rush": 10,
 }
 RATELIMIT_WINDOW_SEC = 60  # sliding window duration
-KNOWN_AD_IDS = {
-    "ad-hairdryer-001",
-    "ad-tank-top-001",
-    "ad-candle-holder-001",
-    "ad-bamboo-glass-jar-001",
-    "ad-watch-001",
-    "ad-mug-001",
-    "ad-loafers-001",
+KNOWN_VIDEO_ADS = {
+    "ad-hairdryer-001": {
+        "creative_id": "creative-hairdryer-video-001",
+        "campaign_id": "campaign-reward-video-demo",
+        "duration_ms": 30000,
+    },
+    "ad-tank-top-001": {
+        "creative_id": "creative-tank-top-video-001",
+        "campaign_id": "campaign-reward-video-demo",
+        "duration_ms": 30000,
+    },
+    "ad-candle-holder-001": {
+        "creative_id": "creative-candle-holder-video-001",
+        "campaign_id": "campaign-reward-video-demo",
+        "duration_ms": 30000,
+    },
+    "ad-bamboo-glass-jar-001": {
+        "creative_id": "creative-bamboo-glass-jar-video-001",
+        "campaign_id": "campaign-reward-video-demo",
+        "duration_ms": 30000,
+    },
+    "ad-watch-001": {
+        "creative_id": "creative-watch-video-001",
+        "campaign_id": "campaign-reward-video-demo",
+        "duration_ms": 30000,
+    },
+    "ad-mug-001": {
+        "creative_id": "creative-mug-video-001",
+        "campaign_id": "campaign-reward-video-demo",
+        "duration_ms": 30000,
+    },
+    "ad-loafers-001": {
+        "creative_id": "creative-loafers-video-001",
+        "campaign_id": "campaign-reward-video-demo",
+        "duration_ms": 30000,
+    },
 }
-KNOWN_CREATIVE_IDS = {
-    "creative-hairdryer-video-001",
-    "creative-tank-top-video-001",
-    "creative-candle-holder-video-001",
-    "creative-bamboo-glass-jar-video-001",
-    "creative-watch-video-001",
-    "creative-mug-video-001",
-    "creative-loafers-video-001",
-}
-KNOWN_CAMPAIGN_IDS = {"campaign-reward-video-demo"}
+KNOWN_AD_IDS = set(KNOWN_VIDEO_ADS.keys())
+KNOWN_CREATIVE_IDS = {item["creative_id"] for item in KNOWN_VIDEO_ADS.values()}
+KNOWN_CAMPAIGN_IDS = {item["campaign_id"] for item in KNOWN_VIDEO_ADS.values()}
 KNOWN_ERROR_TYPES = {"unknown", "decode", "network", "media", "timeout", "other"}
 # 秒杀优惠券配置
 FLASH_POOL_SIZE = int(os.getenv("FLASH_POOL_SIZE", "50"))
@@ -348,6 +369,12 @@ def create_app(redis_client=None):
         if duration_ms <= 0:
             AD_WATCH_SESSION_STARTED.labels(**labels, result="invalid").inc()
             return jsonify({"error": "duration_ms must be positive"}), 400
+        if not _is_known_video_ad(ad_id, creative_id, campaign_id):
+            AD_WATCH_SESSION_STARTED.labels(**labels, result="unknown_ad").inc()
+            return jsonify({"error": "unknown_ad_metadata"}), 400
+        if duration_ms < max(STAGE_TRIGGER_MS.values()):
+            AD_WATCH_SESSION_STARTED.labels(**labels, result="invalid").inc()
+            return jsonify({"error": "duration_ms is shorter than reward stages"}), 400
 
         watch_id = _new_watch_id()
         app.redis.hset(
@@ -479,6 +506,11 @@ def create_app(redis_client=None):
                 **labels, stage=str(stage), result="mismatch"
             ).inc()
             return jsonify({"error": "watch_session_mismatch"}), 409
+        if watch.get("claimed") == "1":
+            AD_REWARD_CLAIM.labels(
+                **labels, stage=str(stage), result="watch_claimed"
+            ).inc()
+            return jsonify({"error": "watch_session_already_claimed"}), 409
 
         max_position_ms = _int_value(watch.get("max_position_ms"))
         required_position_ms = STAGE_TRIGGER_MS[stage]
@@ -507,6 +539,7 @@ def create_app(redis_client=None):
                 _earn_idem_key(session_id, ad_id, stage, today),
                 _coins_key(session_id),
                 _earn_log_key(session_id),
+                _watch_key(watch_id),
             ],
             [
                 coins_to_add,
@@ -514,9 +547,21 @@ def create_app(redis_client=None):
                 EARN_IDEMPOTENCY_TTL_SEC,
                 EARN_LOG_TTL_SEC,
                 f"{int(time.time())}:{ad_id}:stage{stage}:{coins_to_add}coins",
+                stage,
+                int(time.time()),
             ],
         )
         status_name = result[0]
+        if status_name == "watch_missing":
+            AD_REWARD_CLAIM.labels(
+                **labels, stage=str(stage), result="not_found"
+            ).inc()
+            return jsonify({"error": "watch_session_not_found"}), 404
+        if status_name == "watch_claimed":
+            AD_REWARD_CLAIM.labels(
+                **labels, stage=str(stage), result="watch_claimed"
+            ).inc()
+            return jsonify({"error": "watch_session_already_claimed"}), 409
         if status_name == "cooldown":
             AD_REWARD_CLAIM.labels(**labels, stage=str(stage), result="cooldown").inc()
             COOLDOWN_REJECTED.inc()
@@ -1167,6 +1212,16 @@ def _watch_labels_from_hash(watch):
         watch.get("ad_id", ""),
         watch.get("creative_id", ""),
         watch.get("campaign_id", ""),
+    )
+
+
+def _is_known_video_ad(ad_id, creative_id, campaign_id):
+    expected = KNOWN_VIDEO_ADS.get(ad_id)
+    if not expected:
+        return False
+    return (
+        expected["creative_id"] == creative_id
+        and expected["campaign_id"] == campaign_id
     )
 
 

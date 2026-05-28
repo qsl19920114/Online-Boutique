@@ -158,13 +158,20 @@ def watchVideoAd(l):
     if random.random() < 0.01:
         _post_watch_event(l, ad, watch_id, 'error', position_ms, 'network')
 
-    l.client.post("/ads/watch", json={
+    with l.client.post("/ads/watch", json={
         'ad_id': ad['ad_id'],
         'stage': target_stage,
         'watch_id': watch_id,
         'style': ad['style'],
         'show_in': ad['show_in'],
-    }, name="/ads/watch")
+    }, name="/ads/watch", catch_response=True) as reward_response:
+        if reward_response.status_code == 429:
+            try:
+                body = reward_response.json()
+            except ValueError:
+                body = {}
+            if body.get('error') == 'ad reward is cooling down':
+                reward_response.success()
 
 def _post_watch_event(l, ad, watch_id, event, position_ms, error_type=''):
     return l.client.post("/ads/watch/event", json={
