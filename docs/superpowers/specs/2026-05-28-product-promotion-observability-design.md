@@ -214,4 +214,3 @@ Label 白名单：
 - Grafana JSON 通过 `python3 -m json.tool`。
 - `scripts/verify-monitoring-assets.sh` 校验新增脚本和看板。
 - 分支进度总结文档记录本阶段能力、测试命令、限制和后续建议。
-

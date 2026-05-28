@@ -53,6 +53,8 @@ grep -q "reward_request_duration_seconds_bucket" docs/grafana/product-promotion-
 grep -q "run-loadtest-k8s.sh" docs/loadtest-monitoring.md
 grep -q "capture-grafana-screenshots" docs/loadtest-monitoring.md
 grep -q "REWARD_WATCH_FAULT_MODE" docs/loadtest-monitoring.md
+grep -q "LOCUST_SPAWN_RATE" src/loadgenerator/Dockerfile
+grep -q "LOCUST_RUN_TIME" src/loadgenerator/Dockerfile
 
 scripts/deploy-monitoring.sh --render >/tmp/online-boutique-monitoring-render.yaml
 grep -q "name: prometheus" /tmp/online-boutique-monitoring-render.yaml

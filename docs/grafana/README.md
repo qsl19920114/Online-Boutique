@@ -62,6 +62,7 @@ frontend 通过 `/metrics` 暴露商品活动聚合与券代理指标：
 |--------|------|------|
 | `promotion_summary_view_total` | Counter | 商品活动汇总请求结果（label: page/has_product/result） |
 | `coupon_list_proxy_total` | Counter | 优惠券列表代理请求结果（label: page/status/result） |
+| `activity_event_total` | Counter | 活动前端事件（label: page/activity/action，白名单分桶） |
 
 ## 一键部署 Prometheus + Grafana
 

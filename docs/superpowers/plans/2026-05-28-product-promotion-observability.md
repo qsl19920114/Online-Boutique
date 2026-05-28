@@ -371,4 +371,3 @@ git diff --check
 git add docs/branch-progress-product-promotion-observability.md
 git commit -m "docs: summarize promotion observability branch progress"
 ```
-

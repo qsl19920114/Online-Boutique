@@ -758,10 +758,15 @@ func (fe *frontendServer) couponsProxyHandler(w http.ResponseWriter, r *http.Req
 		metricResult,
 	))
 	if metricResult == "failed" {
-		writeJSON(w, map[string]interface{}{
-			"session_id": sid,
-			"coupons":    []interface{}{},
-			"count":      0,
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadGateway)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"ok":              false,
+			"error":           "coupon_list_unavailable",
+			"upstream_status": statusCode,
+			"session_id":      sid,
+			"coupons":         []interface{}{},
+			"count":           0,
 		})
 		return
 	}
@@ -920,11 +925,22 @@ func (fe *frontendServer) subsidyCheckHandler(w http.ResponseWriter, r *http.Req
 
 func (fe *frontendServer) trackHandler(w http.ResponseWriter, r *http.Request) {
 	var payload struct {
-		Event string `json:"event"`
+		Event    string `json:"event"`
+		Page     string `json:"page"`
+		Activity string `json:"activity"`
+		Action   string `json:"action"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&payload)
 	if payload.Event != "" {
 		frontendCounterInc("track_total")
+	}
+	if payload.Activity != "" || payload.Action != "" {
+		frontendCounterInc(fmt.Sprintf(
+			`activity_event_total{page="%s",activity="%s",action="%s"}`,
+			pageMetricLabel(payload.Page),
+			activityMetricLabel(payload.Activity),
+			activityActionMetricLabel(payload.Action),
+		))
 	}
 	writeJSON(w, map[string]bool{"ok": true})
 }
@@ -942,6 +958,7 @@ func (fe *frontendServer) metricsHandler(w http.ResponseWriter, r *http.Request)
 	fmt.Fprintln(w, "# TYPE promotion_summary_view_total counter")
 	fmt.Fprintln(w, "# TYPE coupon_list_proxy_total counter")
 	fmt.Fprintln(w, "# TYPE coupon_apply_total counter")
+	fmt.Fprintln(w, "# TYPE activity_event_total counter")
 	fmt.Fprintln(w, "# TYPE checkout_success_total counter")
 	fmt.Fprintln(w, "# TYPE checkout_failure_total counter")
 	fmt.Fprintln(w, "# TYPE track_total counter")
@@ -1277,6 +1294,28 @@ func couponStatusMetricLabel(status string) string {
 		return strings.ToLower(sanitizeMetricLabel(status))
 	case "unknown":
 		return "all"
+	default:
+		return "other"
+	}
+}
+
+func activityMetricLabel(activity string) string {
+	switch strings.ToLower(sanitizeMetricLabel(activity)) {
+	case "subsidy", "flash", "rush", "ad_video", "coupon", "redeem":
+		return strings.ToLower(sanitizeMetricLabel(activity))
+	case "unknown":
+		return "other"
+	default:
+		return "other"
+	}
+}
+
+func activityActionMetricLabel(action string) string {
+	switch strings.ToLower(sanitizeMetricLabel(action)) {
+	case "view", "click", "claim", "redeem", "lock", "commit", "cancel", "error":
+		return strings.ToLower(sanitizeMetricLabel(action))
+	case "unknown":
+		return "other"
 	default:
 		return "other"
 	}

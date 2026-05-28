@@ -75,9 +75,9 @@ restart the deployment:
   --host frontend:80
 ```
 
-The current loadgenerator image consumes `FRONTEND_ADDR` and `USERS`. The script
-also sets `LOCUST_USERS`, `LOCUST_SPAWN_RATE`, `LOCUST_RUN_TIME`, and
-`LOCUST_HOST` for future-compatible images.
+The loadgenerator image consumes `FRONTEND_ADDR`/`USERS` and also honors
+`LOCUST_HOST`, `LOCUST_USERS`, `LOCUST_SPAWN_RATE`, and `LOCUST_RUN_TIME`, so the
+script controls target host, user count, ramp rate, and run duration.
 
 Restore conservative defaults after the test:
 

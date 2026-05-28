@@ -229,6 +229,58 @@ func TestCouponsProxyAddsSessionAndStatus(t *testing.T) {
 	}
 }
 
+func TestCouponsProxyReturnsBadGatewayWhenRewardServiceFails(t *testing.T) {
+	resetFrontendCountersForTest()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "redis unavailable", http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+
+	fe := frontendServer{rewardServiceAddr: server.Listener.Addr().String()}
+	rec := httptest.NewRecorder()
+	req := requestWithSession(http.MethodGet, "/coupons?status=pending", "", "session-1")
+
+	fe.couponsProxyHandler(rec, req)
+
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "coupon_list_unavailable") {
+		t.Fatalf("body should expose proxy failure, got %s", rec.Body.String())
+	}
+	if frontendCounters[`coupon_list_proxy_total{page="other",status="pending",result="failed"}`] != 1 {
+		t.Fatalf("coupon proxy metric = %#v", frontendCounters)
+	}
+}
+
+func TestTrackHandlerRecordsBoundedActivityEvent(t *testing.T) {
+	resetFrontendCountersForTest()
+
+	var body strings.Builder
+	body.WriteString(`{"event":"activity_click","page":"product","activity":"flash","action":"claim"}`)
+	rec := httptest.NewRecorder()
+	req := requestWithSession(http.MethodPost, "/track", body.String(), "session-1")
+
+	fe := frontendServer{}
+	fe.trackHandler(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if frontendCounters[`track_total`] != 1 {
+		t.Fatalf("track metric = %#v", frontendCounters)
+	}
+	if frontendCounters[`activity_event_total{page="product",activity="flash",action="claim"}`] != 1 {
+		t.Fatalf("activity metric = %#v", frontendCounters)
+	}
+	for key := range frontendCounters {
+		if strings.Contains(key, "session-1") {
+			t.Fatalf("metric label should not contain session id: %s", key)
+		}
+	}
+}
+
 func TestPromotionSummaryFallsBackWhenRewardServiceUnavailable(t *testing.T) {
 	resetFrontendCountersForTest()
 

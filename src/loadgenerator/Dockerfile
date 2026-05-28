@@ -32,4 +32,10 @@ COPY locustfile.py .
 # enable gevent support in debugger
 ENV GEVENT_SUPPORT=True
 
-ENTRYPOINT locust --host="http://${FRONTEND_ADDR}" --headless -u "${USERS:-10}" 2>&1
+ENTRYPOINT set -- locust \
+    --host="${LOCUST_HOST:-http://${FRONTEND_ADDR}}" \
+    --headless \
+    -u "${LOCUST_USERS:-${USERS:-10}}" \
+    -r "${LOCUST_SPAWN_RATE:-1}" && \
+    if [ -n "${LOCUST_RUN_TIME:-}" ]; then set -- "$@" -t "$LOCUST_RUN_TIME"; fi && \
+    exec "$@" 2>&1
