@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 )
@@ -58,6 +59,72 @@ func TestWatchAdForwardsWatchID(t *testing.T) {
 	}
 	if got["watch_id"] != "watch-123" {
 		t.Fatalf("watch_id = %#v", got["watch_id"])
+	}
+}
+
+func TestWatchAdPreservesRewardServiceStatusAndBody(t *testing.T) {
+	resetFrontendCountersForTest()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusConflict)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"error":                "watch_progress_insufficient",
+			"required_position_ms": 10000,
+			"max_position_ms":      7000,
+		})
+	}))
+	defer server.Close()
+
+	fe := frontendServer{rewardServiceAddr: server.Listener.Addr().String()}
+	rec := httptest.NewRecorder()
+	req := requestWithSession(
+		http.MethodPost,
+		"/ads/watch",
+		`{"ad_id":"ad-watch-001","stage":1,"watch_id":"watch-123","style":"modal","show_in":"home"}`,
+		"session-1",
+	)
+
+	fe.watchAdHandler(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusConflict, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "watch_progress_insufficient") {
+		t.Fatalf("body should preserve rewardservice error, got %s", rec.Body.String())
+	}
+	if frontendCounters[`ad_watch_reward_proxy_total{result="status_409"}`] != 1 {
+		t.Fatalf("reward proxy metric = %#v", frontendCounters)
+	}
+}
+
+func TestWatchAdBucketsClickMetricLabels(t *testing.T) {
+	resetFrontendCountersForTest()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"coins_added": 5,
+			"balance":     5,
+			"stage":       1,
+		})
+	}))
+	defer server.Close()
+
+	fe := frontendServer{rewardServiceAddr: server.Listener.Addr().String()}
+	rec := httptest.NewRecorder()
+	req := requestWithSession(
+		http.MethodPost,
+		"/ads/watch",
+		`{"ad_id":"ad-watch-001","stage":1,"watch_id":"watch-123","style":"custom-style-user-123","show_in":"custom-place-user-456"}`,
+		"session-1",
+	)
+
+	fe.watchAdHandler(rec, req)
+
+	if frontendCounters[`ad_click_total{style="other",show_in="other"}`] != 1 {
+		t.Fatalf("click metric should be bucketed, got %#v", frontendCounters)
+	}
+	if frontendCounters[`ad_click_total{style="custom-style-user-123",show_in="custom-place-user-456"}`] != 0 {
+		t.Fatalf("raw client labels should not be used: %#v", frontendCounters)
 	}
 }
 
@@ -161,6 +228,76 @@ func TestWatchEventProxyBucketsUnknownEventMetric(t *testing.T) {
 	if metrics[`ad_watch_event_proxy_total{event="custom-client-event-with-user-data",result="success"}`] != 0 {
 		t.Fatalf("raw client event should not be used as a metric label: %#v", metrics)
 	}
+}
+
+func TestAdTemplateHasWatchSessionRaceGuards(t *testing.T) {
+	body := readAdTemplate(t)
+	for _, want := range []string{
+		"let modalRequestToken = 0;",
+		"const requestToken = ++modalRequestToken;",
+		"requestToken !== modalRequestToken",
+		"let stageSyncing = false;",
+		"const progressSynced = await sendWatchEvent('timeupdate');",
+		"if (!progressSynced)",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("ad template missing watch-session guard %q", want)
+		}
+	}
+}
+
+func TestAdTemplateResolvesBareRelativeAssetsFromBaseURL(t *testing.T) {
+	body := readAdTemplate(t)
+	if !strings.Contains(body, "return '{{$.baseUrl}}/' + value;") {
+		t.Fatalf("ad template should resolve bare relative video/poster URLs from baseUrl")
+	}
+}
+
+func TestAdTemplateHandlesEarnNetworkFailures(t *testing.T) {
+	body := readAdTemplate(t)
+	submitEarn := readAdTemplateFunction(t, "async function submitEarn")
+	for _, want := range []string{
+		"try {",
+		"await fetch('{{$.baseUrl}}/ads/watch'",
+		"catch (err)",
+		"showRewardFailure(",
+	} {
+		if !strings.Contains(submitEarn, want) {
+			t.Fatalf("submitEarn missing earn failure handling fragment %q", want)
+		}
+	}
+	for _, want := range []string{
+		"function showRewardFailure(message)",
+		"rewardSubmitted = false;",
+		"Reward not available",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("ad template missing earn failure handling fragment %q", want)
+		}
+	}
+}
+
+func readAdTemplate(t *testing.T) string {
+	t.Helper()
+	body, err := os.ReadFile("templates/ad.html")
+	if err != nil {
+		t.Fatalf("read ad template: %v", err)
+	}
+	return string(body)
+}
+
+func readAdTemplateFunction(t *testing.T, functionStart string) string {
+	t.Helper()
+	body := readAdTemplate(t)
+	start := strings.Index(body, functionStart)
+	if start == -1 {
+		t.Fatalf("ad template missing %q", functionStart)
+	}
+	end := strings.Index(body[start:], "\n    }\n")
+	if end == -1 {
+		return body[start:]
+	}
+	return body[start : start+end+7]
 }
 
 func TestMetricsHandlerIncludesWatchProxyCounters(t *testing.T) {

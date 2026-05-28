@@ -232,6 +232,8 @@
     let unlockedStage = 0;
     let lastTimeupdateSent = 0;
     let rewardSubmitted = false;
+    let stageSyncing = false;
+    let modalRequestToken = 0;
 
     buttons.forEach(function (button) {
         button.addEventListener('click', function () {
@@ -249,6 +251,7 @@
         unlockedStage = 0;
         lastTimeupdateSent = 0;
         rewardSubmitted = false;
+        stageSyncing = false;
         watchId = '';
         skipButton.style.display = '';
         exitButton.style.display = 'none';
@@ -268,10 +271,11 @@
         if (!value) return fallback;
         if (/^(https?:)?\/\//i.test(value)) return value;
         if (value.charAt(0) === '/') return '{{$.baseUrl}}' + value;
-        return value;
+        return '{{$.baseUrl}}/' + value;
     }
 
     async function openRewardModal(button) {
+        const requestToken = ++modalRequestToken;
         activeButton = button;
         resetModal();
         adHeadline.textContent = button.dataset.adText || button.dataset.adId || 'Special offer';
@@ -298,12 +302,15 @@
                     duration_ms: Number(button.dataset.durationMs || 30000)
                 })
             });
-            config = await res.json();
-            if (!res.ok || !config.watch_id) throw new Error(config.error || 'watch_start_failed');
+            const nextConfig = await res.json();
+            if (requestToken !== modalRequestToken || activeButton !== button) return;
+            if (!res.ok || !nextConfig.watch_id) throw new Error(nextConfig.error || 'watch_start_failed');
+            config = nextConfig;
             watchId = config.watch_id;
             if (!config.stages && config.stage_config) config.stages = config.stage_config.stages;
             if (!Array.isArray(config.stages) || !config.stages.length) throw new Error('stage_config_missing');
         } catch (err) {
+            if (requestToken !== modalRequestToken || activeButton !== button) return;
             title.textContent = 'Reward service unavailable';
             copy.textContent = 'Please try again in a moment.';
             return;
@@ -337,6 +344,8 @@
     }
 
     skipButton.addEventListener('click', function () {
+        modalRequestToken += 1;
+        sendWatchEvent('pause');
         adVideo.pause();
         backdrop.hidden = true;
     });
@@ -393,20 +402,33 @@
     }
 
     async function handleStageProgress(fromEnded) {
-        if (!config || !config.stages || checkpoint || rewardSubmitted) return;
+        if (!config || !config.stages || checkpoint || rewardSubmitted || stageSyncing) return;
         const currentSeconds = adVideo.currentTime || 0;
         const reached = config.stages.filter(function (stage) {
             return currentSeconds >= stage.trigger_sec;
         }).pop();
         if (!reached || reached.stage <= unlockedStage) return;
 
+        stageSyncing = true;
+        adVideo.pause();
+        const progressSynced = await sendWatchEvent('timeupdate');
+        stageSyncing = false;
+        if (!progressSynced) {
+            title.textContent = 'Still verifying playback';
+            copy.textContent = 'Playback progress could not be confirmed. Keep watching to unlock coins.';
+            adVideo.play().catch(function () {
+                continueButton.textContent = 'Retry playback';
+                continueButton.style.display = '';
+            });
+            return;
+        }
+
         checkpoint = reached;
         unlockedStage = reached.stage;
         markStage(reached.stage);
-        adVideo.pause();
-        await sendWatchEvent(fromEnded ? 'ended' : 'timeupdate');
 
         if (reached.stage === config.stages[config.stages.length - 1].stage) {
+            await sendWatchEvent('ended');
             submitEarn(reached.stage);
             return;
         }
@@ -455,18 +477,28 @@
     async function submitEarn(stage) {
         rewardSubmitted = true;
         adVideo.pause();
-        const res = await fetch('{{$.baseUrl}}/ads/watch', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({
-                ad_id: activeButton.dataset.adId || 'default-ad',
-                stage: stage,
-                watch_id: watchId,
-                style: activeButton.dataset.adStyle || 'unknown',
-                show_in: activeButton.dataset.adShowIn || 'unknown'
-            })
-        });
-        const data = await res.json();
+        let data = {};
+        try {
+            const res = await fetch('{{$.baseUrl}}/ads/watch', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    ad_id: activeButton.dataset.adId || 'default-ad',
+                    stage: stage,
+                    watch_id: watchId,
+                    style: activeButton.dataset.adStyle || 'unknown',
+                    show_in: activeButton.dataset.adShowIn || 'unknown'
+                })
+            });
+            data = await res.json();
+            if (!res.ok) {
+                showRewardFailure(data.error || 'Reward not available.');
+                return;
+            }
+        } catch (err) {
+            showRewardFailure('Please check your connection and try again.');
+            return;
+        }
         if (data.ok && typeof data.balance !== 'undefined') {
             const balanceEl = document.querySelector('.reward-balance');
             if (balanceEl) balanceEl.textContent = data.balance;
@@ -482,14 +514,18 @@
                 resetModal();
             }, 2000);
         } else {
-            rewardSubmitted = false;
-            title.textContent = 'Reward not available';
-            copy.textContent = data.error || 'Please try another ad in a moment.';
-            timerEl.textContent = '';
-            skipButton.style.display = '';
-            exitButton.hidden = true;
-            continueButton.hidden = true;
+            showRewardFailure(data.error || 'Please try another ad in a moment.');
         }
+    }
+
+    function showRewardFailure(message) {
+        rewardSubmitted = false;
+        title.textContent = 'Reward not available';
+        copy.textContent = message;
+        timerEl.textContent = '';
+        skipButton.style.display = '';
+        exitButton.hidden = true;
+        continueButton.hidden = true;
     }
 })();
 </script>

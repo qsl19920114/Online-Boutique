@@ -521,23 +521,41 @@ func (fe *frontendServer) watchAdHandler(w http.ResponseWriter, r *http.Request)
 	}
 	frontendCounterInc(fmt.Sprintf(
 		`ad_click_total{style="%s",show_in="%s"}`,
-		sanitizeMetricLabel(payload.Style),
-		sanitizeMetricLabel(payload.ShowIn),
+		adStyleMetricLabel(payload.Style),
+		adShowInMetricLabel(payload.ShowIn),
 	))
-	var out map[string]interface{}
-	err := fe.rewardPost(r.Context(), "/earn", rewardEarnRequest{
+	body, err := json.Marshal(rewardEarnRequest{
 		SessionID: sessionID(r),
 		AdID:      payload.AdID,
 		Stage:     payload.Stage,
 		WatchID:   payload.WatchID,
-	}, &out)
+	})
+	if err != nil {
+		frontendCounterInc(`ad_watch_reward_proxy_total{result="bad_gateway"}`)
+		writeJSON(w, map[string]interface{}{"ok": false, "error": err.Error()})
+		return
+	}
+	result, statusCode, err := fe.rewardPostRaw(r.Context(), "/earn", body)
 	if err != nil {
 		frontendCounterInc(`ad_watch_reward_proxy_total{result="bad_gateway"}`)
 		w.WriteHeader(http.StatusBadGateway)
 		writeJSON(w, map[string]interface{}{"ok": false, "error": err.Error()})
 		return
 	}
-	frontendCounterInc(`ad_watch_reward_proxy_total{result="success"}`)
+	frontendCounterInc(fmt.Sprintf(`ad_watch_reward_proxy_total{result="%s"}`, proxyResultLabel(statusCode)))
+	if statusCode < 200 || statusCode >= 300 {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(statusCode)
+		w.Write(result)
+		return
+	}
+	var out map[string]interface{}
+	if err := json.Unmarshal(result, &out); err != nil {
+		frontendCounterInc(`ad_watch_reward_proxy_total{result="bad_response"}`)
+		w.WriteHeader(http.StatusBadGateway)
+		writeJSON(w, map[string]interface{}{"ok": false, "error": "invalid rewardservice response"})
+		return
+	}
 	if payload.Stage == 3 {
 		frontendCounterInc("ad_watch_complete_total")
 	}
@@ -939,6 +957,28 @@ func watchEventMetricLabel(event string) string {
 		return "unknown"
 	case "loadedmetadata", "playing", "timeupdate", "waiting", "pause", "ended", "error":
 		return strings.ToLower(strings.TrimSpace(event))
+	default:
+		return "other"
+	}
+}
+
+func adStyleMetricLabel(style string) string {
+	switch sanitizeMetricLabel(style) {
+	case "banner", "card", "wide-card", "compact", "float", "thank", "modal":
+		return sanitizeMetricLabel(style)
+	case "unknown":
+		return "unknown"
+	default:
+		return "other"
+	}
+}
+
+func adShowInMetricLabel(showIn string) string {
+	switch sanitizeMetricLabel(showIn) {
+	case "product", "home", "recommendations", "cart", "global", "order":
+		return sanitizeMetricLabel(showIn)
+	case "unknown":
+		return "unknown"
 	default:
 		return "other"
 	}
