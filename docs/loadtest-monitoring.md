@@ -25,6 +25,10 @@ Prometheus listens on:
 http://127.0.0.1:9090
 ```
 
+The local Prometheus configuration scrapes both `host.docker.internal:8091`
+for RewardService metrics and `host.docker.internal:8080` for frontend
+promotion/coupon proxy metrics.
+
 If the full frontend is running locally, a direct Locust smoke run can generate
 traffic against it:
 

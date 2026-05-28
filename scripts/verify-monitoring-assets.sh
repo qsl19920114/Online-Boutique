@@ -35,6 +35,8 @@ bash -n scripts/run-reward-demo-local.sh
 bash -n scripts/run-monitoring-local-docker.sh
 bash -n scripts/run-loadtest-k8s.sh
 bash -n scripts/capture-grafana-screenshots.sh
+grep -q "FRONTEND_TARGET" scripts/run-monitoring-local-docker.sh
+grep -q "frontend-local" scripts/run-monitoring-local-docker.sh
 
 PYTHONPYCACHEPREFIX="${PYTHONPYCACHEPREFIX:-/tmp/online-boutique-pycache}" \
   python3 -m py_compile scripts/capture-grafana-screenshots.py

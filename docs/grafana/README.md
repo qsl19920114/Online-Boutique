@@ -96,6 +96,7 @@ admin / admin
 
 ```text
 host.docker.internal:8091/metrics
+host.docker.internal:8080/metrics
 ```
 
 ### 方式二：Kubernetes 部署

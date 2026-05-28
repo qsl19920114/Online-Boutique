@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORK_DIR="$ROOT_DIR/.monitoring-local"
 REWARD_TARGET="${REWARD_TARGET:-host.docker.internal:8091}"
+FRONTEND_TARGET="${FRONTEND_TARGET:-host.docker.internal:8080}"
 PROMETHEUS_IMAGE="${PROMETHEUS_IMAGE:-prom/prometheus:v2.55.1}"
 GRAFANA_IMAGE="${GRAFANA_IMAGE:-grafana/grafana:11.3.1}"
 PROMETHEUS_CONTAINER="${PROMETHEUS_CONTAINER:-online-boutique-prometheus}"
@@ -33,6 +34,14 @@ scrape_configs:
           - "$REWARD_TARGET"
         labels:
           app: rewardservice
+          namespace: local
+  - job_name: frontend-local
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - "$FRONTEND_TARGET"
+        labels:
+          app: frontend
           namespace: local
 EOF
 
@@ -97,6 +106,9 @@ Grafana:
 
 RewardService target:
   http://$REWARD_TARGET/metrics
+
+Frontend target:
+  http://$FRONTEND_TARGET/metrics
 
 Stop:
   docker rm -f $PROMETHEUS_CONTAINER $GRAFANA_CONTAINER
