@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 import rewardservice
 
@@ -764,13 +765,65 @@ class RewardServiceTest(unittest.TestCase):
     def test_metrics_include_watch_and_claim_counters(self):
         watch_id = self._eligible_watch_id()
         self._earn(watch_id=watch_id)
+        started = self._start_watch(ad_id="ad-metrics-2")
+        watch_id_2 = started.get_json()["watch_id"]
+        self.client.post(
+            "/ads/watch/event",
+            json={
+                "session_id": "session-1",
+                "watch_id": watch_id_2,
+                "ad_id": "ad-metrics-2",
+                "event": "waiting",
+                "position_ms": 3000,
+            },
+        )
+        self.client.post(
+            "/ads/watch/event",
+            json={
+                "session_id": "session-1",
+                "watch_id": watch_id_2,
+                "ad_id": "ad-metrics-2",
+                "event": "error",
+                "position_ms": 3000,
+                "error_type": "decode",
+            },
+        )
+        with patch.dict(
+            "os.environ",
+            {
+                "REWARD_WATCH_FAULT_MODE": "error",
+                "REWARD_WATCH_FAULT_RATE": "1",
+            },
+        ):
+            self.client.post(
+                "/ads/watch/start",
+                json={
+                    "session_id": "session-1",
+                    "ad_id": "ad-fault",
+                    "creative_id": "creative-fault",
+                    "campaign_id": "campaign-fault",
+                    "duration_ms": 30000,
+                },
+            )
 
         res = self.client.get("/metrics")
 
         self.assertIn(b"ad_watch_session_started_total", res.data)
         self.assertIn(b"ad_watch_event_total", res.data)
         self.assertIn(b"ad_watch_progress_seconds", res.data)
+        self.assertIn(b"ad_watch_rebuffer_total", res.data)
+        self.assertIn(b"ad_watch_error_total", res.data)
+        self.assertIn(b"ad_watch_fault_injected_total", res.data)
         self.assertIn(b"ad_reward_claim_total", res.data)
+
+    def test_metrics_do_not_expose_session_id_labels(self):
+        self._earn(session_id="s1")
+        self.client.get("/coins/s1")
+
+        res = self.client.get("/metrics")
+
+        self.assertIn(b"coin_balance_current", res.data)
+        self.assertNotIn(b'coin_balance_current{session_id="', res.data)
 
     def test_metrics_include_redeemed_by_cost(self):
         self.redis.set("coins:session-1", 50)

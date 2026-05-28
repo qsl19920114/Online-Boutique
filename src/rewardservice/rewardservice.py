@@ -94,7 +94,7 @@ COINS_EARNED = Counter(
     "Coins earned by source.",
     ["source"],
 )
-COIN_BALANCE = Gauge("coin_balance_current", "Latest observed coin balance.", ["session_id"])
+COIN_BALANCE = Gauge("coin_balance_current", "Latest observed coin balance.")
 COUPON_REDEEMED = Counter(
     "coupon_redeemed_total",
     "Coupons redeemed with coins by cost.",
@@ -207,7 +207,7 @@ def create_app(redis_client=None):
     @timed("coins")
     def coins(session_id):
         balance = _int_value(app.redis.get(_coins_key(session_id)))
-        COIN_BALANCE.labels(session_id=session_id).set(balance)
+        COIN_BALANCE.set(balance)
         return jsonify({"session_id": session_id, "balance": balance})
 
     # ── 金币流水 ──────────────────────────────────────────────────────────── #
@@ -505,7 +505,7 @@ def create_app(redis_client=None):
         balance = int(result[1])
         AD_REWARD_CLAIM.labels(**labels, stage=str(stage), result="success").inc()
         COINS_EARNED.labels(source="ad").inc(coins_to_add)
-        COIN_BALANCE.labels(session_id=session_id).set(balance)
+        COIN_BALANCE.set(balance)
         # 记录交易流水
         _record_transaction(app.redis, session_id, "earn", coins_to_add, f"ad:{ad_id}:stage{stage}")
         return jsonify(
@@ -559,7 +559,7 @@ def create_app(redis_client=None):
 
         remaining = int(result[1])
         COUPON_REDEEMED.labels(cost=str(cost)).inc()
-        COIN_BALANCE.labels(session_id=session_id).set(remaining)
+        COIN_BALANCE.set(remaining)
         # 索引优惠券到用户列表
         app.redis.lpush(_coupon_index_key(session_id), code)
         # 记录交易流水
@@ -641,9 +641,7 @@ def create_app(redis_client=None):
         refund = int(result[1])
         COUPON_CANCELLED.inc()
         if refund > 0 and session_id:
-            COIN_BALANCE.labels(session_id=session_id).set(
-                _int_value(app.redis.get(_coins_key(session_id)))
-            )
+            COIN_BALANCE.set(_int_value(app.redis.get(_coins_key(session_id))))
             _record_transaction(app.redis, session_id, "refund", refund, f"coupon_cancel:{code}")
         return jsonify({"success": True, "refund_coins": refund})
 
@@ -735,7 +733,7 @@ def create_app(redis_client=None):
         if weekly_bonus:
             WEEKLY_BONUS.inc()
         COINS_EARNED.labels(source="checkin").inc(coins_added)
-        COIN_BALANCE.labels(session_id=session_id).set(balance)
+        COIN_BALANCE.set(balance)
         _record_transaction(app.redis, session_id, "checkin", coins_added, f"streak:{streak}")
         return jsonify(
             {
@@ -856,7 +854,7 @@ def create_app(redis_client=None):
         FLASH_CLAIMED.inc()
         if FLASH_COST_COINS > 0:
             COINS_EARNED.labels(source="flash_spend").inc(0)  # no-op, just tracking
-        COIN_BALANCE.labels(session_id=session_id).set(balance)
+        COIN_BALANCE.set(balance)
         # 索引优惠券到用户列表
         app.redis.lpush(_coupon_index_key(session_id), coupon_code)
         # 记录交易流水
@@ -939,7 +937,7 @@ def create_app(redis_client=None):
         remaining = int(result[3])
         RUSH_CLAIMED.inc()
         COINS_EARNED.labels(source="rush").inc(coins_added)
-        COIN_BALANCE.labels(session_id=session_id).set(balance)
+        COIN_BALANCE.set(balance)
         _record_transaction(app.redis, session_id, "rush", coins_added, f"slot:{slot}")
         return jsonify({
             "coins_added": coins_added,
