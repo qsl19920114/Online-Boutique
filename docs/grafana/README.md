@@ -11,6 +11,7 @@
 | `rewardservice-flash-rush.json` | ⚡ 秒杀 & 整点抢 | 秒杀/整点抢趋势、售罄率 |
 | `rewardservice-health.json` | 🏥 服务质量 | 接口延迟、限流、Redis 连接池 |
 | `ad-video-stability.json` | 广告视频播放稳定性 | 视频观看会话、播放事件、卡顿/错误、奖励领取、Chaos 注入 |
+| `product-promotion-closed-loop.json` | 商品活动/优惠券闭环 | 商品活动曝光、优惠券状态流转、金币消耗/退回、RewardService p95 |
 
 ## 指标说明
 
@@ -25,6 +26,10 @@ rewardservice 通过 `/metrics` 端点暴露以下 Prometheus 指标：
 | `coupon_redeemed_total` | Counter | 优惠券兑换次数 |
 | `coupon_used_total` | Counter | 优惠券实际使用次数 |
 | `coupon_validate_failed_total` | Counter | 优惠券验证失败次数 |
+| `coupon_lifecycle_total` | Counter | 优惠券状态流转（label: source/from_status/to_status/result） |
+| `coupon_validate_total` | Counter | 优惠券校验结果（label: source/result/reason） |
+| `coin_spent_total` | Counter | 金币消耗次数/数量（label: source） |
+| `coin_refunded_total` | Counter | 金币退回次数/数量（label: source）；当前 checkout cancel 不退金币 |
 | `cooldown_rejected_total` | Counter | 广告冷却期拒绝次数 |
 | `ad_watch_session_started_total` | Counter | 视频广告观看会话创建结果（label: ad_id/creative_id/campaign_id/result） |
 | `ad_watch_event_total` | Counter | 视频播放事件上报结果（label: event/ad_id/creative_id/campaign_id/result） |
@@ -48,6 +53,15 @@ rewardservice 通过 `/metrics` 端点暴露以下 Prometheus 指标：
 | `reward_request_duration_seconds` | Histogram | 接口请求延迟（label: endpoint） |
 | `ratelimit_rejected_total` | Counter | 限流拒绝次数（label: endpoint） |
 | `redis_pool_connections_active` | Gauge | Redis 连接池活跃连接数 |
+
+### Frontend 指标
+
+frontend 通过 `/metrics` 暴露商品活动聚合与券代理指标：
+
+| 指标名 | 类型 | 说明 |
+|--------|------|------|
+| `promotion_summary_view_total` | Counter | 商品活动汇总请求结果（label: page/has_product/result） |
+| `coupon_list_proxy_total` | Counter | 优惠券列表代理请求结果（label: page/status/result） |
 
 ## 一键部署 Prometheus + Grafana
 
@@ -179,6 +193,36 @@ Demo 页面会直接调用 rewardservice 的接口：
 
 ```bash
 ./scripts/verify-monitoring-assets.sh
+```
+
+运行 Kubernetes loadgenerator 造数：
+
+```bash
+./scripts/run-loadtest-k8s.sh --namespace default --users 100 --spawn-rate 10 --duration 20m
+```
+
+恢复保守负载：
+
+```bash
+./scripts/run-loadtest-k8s.sh --namespace default --restore
+```
+
+采集 Grafana 截图：
+
+```bash
+./scripts/capture-grafana-screenshots.sh --grafana-url http://127.0.0.1:3000
+```
+
+默认输出目录：
+
+```text
+docs/screenshots/grafana/<timestamp>/
+```
+
+完整压测、监控、Chaos 与截图流程见：
+
+```text
+docs/loadtest-monitoring.md
 ```
 
 只渲染监控 YAML：

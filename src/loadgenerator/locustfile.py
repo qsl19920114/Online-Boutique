@@ -16,7 +16,7 @@
 
 import random
 import time
-from locust import FastHttpUser, TaskSet, between
+from locust import FastHttpUser, TaskSet, between, task
 from faker import Faker
 import datetime
 fake = Faker()
@@ -72,6 +72,15 @@ fallback_stages = [
     {'stage': 2, 'trigger_sec': 20, 'coins': 12},
     {'stage': 3, 'trigger_sec': 30, 'coins': 20},
 ]
+
+business_success_errors = {
+    'already_claimed',
+    'no_active_flash',
+    'not_active',
+    'not_rush_time',
+    'rush_sold_out',
+    'sold_out',
+}
 
 def index(l):
     l.client.get("/")
@@ -173,6 +182,54 @@ def watchVideoAd(l):
             if body.get('error') == 'ad reward is cooling down':
                 reward_response.success()
 
+def viewPromotionSummary(l):
+    product = random.choice(products)
+    l.client.get(
+        f"/promotion/summary?product_id={product}",
+        name="/promotion/summary")
+
+def viewRewardsAndCoupons(l):
+    l.client.get("/rewards", name="/rewards")
+    l.client.get("/coupons?status=pending", name="/coupons?status=pending")
+
+def claimFlashOrRush(l):
+    with l.client.post(
+            "/ads/flash/claim",
+            name="/ads/flash/claim",
+            catch_response=True) as flash_response:
+        _mark_business_response_success(flash_response)
+
+    with l.client.post(
+            "/ads/rush/claim",
+            name="/ads/rush/claim",
+            catch_response=True) as rush_response:
+        _mark_business_response_success(rush_response)
+
+def _mark_business_response_success(response):
+    if response.status_code >= 500 or response.status_code < 400:
+        return
+
+    try:
+        body = response.json()
+    except ValueError:
+        return
+
+    if _has_business_success_error(body):
+        response.success()
+
+def _has_business_success_error(body):
+    if not isinstance(body, dict):
+        return False
+
+    for key in ('error', 'error_code', 'reason', 'code', 'status'):
+        value = body.get(key)
+        if value is None:
+            continue
+        if str(value).lower() in business_success_errors:
+            return True
+
+    return False
+
 def _post_watch_event(l, ad, watch_id, event, position_ms, error_type=''):
     return l.client.post("/ads/watch/event", json={
         'watch_id': watch_id,
@@ -198,6 +255,18 @@ class UserBehavior(TaskSet):
         viewCart: 3,
         checkout: 1,
         watchVideoAd: 2}
+
+    @task(2)
+    def view_promotion_summary(self):
+        viewPromotionSummary(self)
+
+    @task(1)
+    def view_rewards_and_coupons(self):
+        viewRewardsAndCoupons(self)
+
+    @task(1)
+    def claim_flash_or_rush(self):
+        claimFlashOrRush(self)
 
 class WebsiteUser(FastHttpUser):
     tasks = [UserBehavior]
