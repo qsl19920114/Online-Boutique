@@ -16,6 +16,8 @@ syntax = "proto3";
 
 package hipstershop;
 
+option go_package = "github.com/GoogleCloudPlatform/microservices-demo/hipstershop";
+
 // -----------------Cart service-----------------
 
 service CartService {
@@ -209,6 +211,9 @@ message OrderResult {
     Money shipping_cost = 3;
     Address  shipping_address = 4;
     repeated OrderItem items = 5;
+    string coupon_code = 6;
+    Money discount_amount = 7;
+    Money total_paid = 8;
 }
 
 message SendOrderConfirmationRequest {
@@ -228,6 +233,7 @@ message PlaceOrderRequest {
     string user_currency = 2;
 
     Address address = 3;
+    string coupon_code = 4;
     string email = 5;
     CreditCardInfo credit_card = 6;
 }
@@ -257,4 +263,11 @@ message Ad {
 
     // short advertisement text to display.
     string text = 2;
+
+    string ad_id = 3;
+    string creative_id = 4;
+    string video_url = 5;
+    string poster_url = 6;
+    int32 duration_ms = 7;
+    string campaign_id = 8;
 }

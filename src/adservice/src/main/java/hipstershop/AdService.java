@@ -118,6 +118,10 @@ public final class AdService {
     }
   }
 
+  private static final String REWARD_VIDEO_URL =
+      "https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4";
+  private static final int REWARD_VIDEO_DURATION_MS = 30000;
+  private static final String REWARD_VIDEO_CAMPAIGN_ID = "campaign-reward-video-demo";
   private static final ImmutableListMultimap<String, Ad> adsMap = createAdsMap();
 
   private Collection<Ad> getAdsByCategory(String category) {
@@ -151,36 +155,78 @@ public final class AdService {
         Ad.newBuilder()
             .setRedirectUrl("/product/2ZYFJ3GM2N")
             .setText("Hairdryer for sale. 50% off.")
+            .setAdId("ad-hairdryer-001")
+            .setCreativeId("creative-hairdryer-video-001")
+            .setVideoUrl(REWARD_VIDEO_URL)
+            .setPosterUrl("/static/img/products/hairdryer.jpg")
+            .setDurationMs(REWARD_VIDEO_DURATION_MS)
+            .setCampaignId(REWARD_VIDEO_CAMPAIGN_ID)
             .build();
     Ad tankTop =
         Ad.newBuilder()
             .setRedirectUrl("/product/66VCHSJNUP")
             .setText("Tank top for sale. 20% off.")
+            .setAdId("ad-tank-top-001")
+            .setCreativeId("creative-tank-top-video-001")
+            .setVideoUrl(REWARD_VIDEO_URL)
+            .setPosterUrl("/static/img/products/tank-top.jpg")
+            .setDurationMs(REWARD_VIDEO_DURATION_MS)
+            .setCampaignId(REWARD_VIDEO_CAMPAIGN_ID)
             .build();
     Ad candleHolder =
         Ad.newBuilder()
             .setRedirectUrl("/product/0PUK6V6EV0")
             .setText("Candle holder for sale. 30% off.")
+            .setAdId("ad-candle-holder-001")
+            .setCreativeId("creative-candle-holder-video-001")
+            .setVideoUrl(REWARD_VIDEO_URL)
+            .setPosterUrl("/static/img/products/candle-holder.jpg")
+            .setDurationMs(REWARD_VIDEO_DURATION_MS)
+            .setCampaignId(REWARD_VIDEO_CAMPAIGN_ID)
             .build();
     Ad bambooGlassJar =
         Ad.newBuilder()
             .setRedirectUrl("/product/9SIQT8TOJO")
             .setText("Bamboo glass jar for sale. 10% off.")
+            .setAdId("ad-bamboo-glass-jar-001")
+            .setCreativeId("creative-bamboo-glass-jar-video-001")
+            .setVideoUrl(REWARD_VIDEO_URL)
+            .setPosterUrl("/static/img/products/bamboo-glass-jar.jpg")
+            .setDurationMs(REWARD_VIDEO_DURATION_MS)
+            .setCampaignId(REWARD_VIDEO_CAMPAIGN_ID)
             .build();
     Ad watch =
         Ad.newBuilder()
             .setRedirectUrl("/product/1YMWWN1N4O")
             .setText("Watch for sale. Buy one, get second kit for free")
+            .setAdId("ad-watch-001")
+            .setCreativeId("creative-watch-video-001")
+            .setVideoUrl(REWARD_VIDEO_URL)
+            .setPosterUrl("/static/img/products/watch.jpg")
+            .setDurationMs(REWARD_VIDEO_DURATION_MS)
+            .setCampaignId(REWARD_VIDEO_CAMPAIGN_ID)
             .build();
     Ad mug =
         Ad.newBuilder()
             .setRedirectUrl("/product/6E92ZMYYFZ")
             .setText("Mug for sale. Buy two, get third one for free")
+            .setAdId("ad-mug-001")
+            .setCreativeId("creative-mug-video-001")
+            .setVideoUrl(REWARD_VIDEO_URL)
+            .setPosterUrl("/static/img/products/mug.jpg")
+            .setDurationMs(REWARD_VIDEO_DURATION_MS)
+            .setCampaignId(REWARD_VIDEO_CAMPAIGN_ID)
             .build();
     Ad loafers =
         Ad.newBuilder()
             .setRedirectUrl("/product/L9ECAV7KIM")
             .setText("Loafers for sale. Buy one, get second one for free")
+            .setAdId("ad-loafers-001")
+            .setCreativeId("creative-loafers-video-001")
+            .setVideoUrl(REWARD_VIDEO_URL)
+            .setPosterUrl("/static/img/products/loafers.jpg")
+            .setDurationMs(REWARD_VIDEO_DURATION_MS)
+            .setCampaignId(REWARD_VIDEO_CAMPAIGN_ID)
             .build();
     return ImmutableListMultimap.<String, Ad>builder()
         .putAll("clothing", tankTop)
