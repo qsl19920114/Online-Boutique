@@ -206,33 +206,21 @@ class FakeRedis:
             self.hset(keys[0], mapping={"status": "used", "used_at": args[0]})
             return ["ok"]
         if "-- rewardservice:coupon_cancel" in script:
-            coupon_key, coins_key = keys
+            coupon_key = keys[0]
             now = args[0]
             coupon = self.hgetall(coupon_key)
             if not coupon:
                 return ["not_found"]
             status = coupon.get("status")
-            # pending 状态：优惠券尚未被 validate 锁定，无需退币直接释放
-            # 只有 locked 状态才会触发退币逻辑
             if status == "pending":
                 return ["ok", "0"]
             if status != "locked":
                 return ["unavailable"]
-            # Calculate refund
-            source = coupon.get("source", "redeem")
-            discount_pct = int(coupon.get("discount_pct", "0"))
-            refund = 0
-            if source == "flash":
-                refund = int(coupon.get("cost_coins", "0"))
-            else:
-                if discount_pct == 90:
-                    refund = 50
-                elif discount_pct == 80:
-                    refund = 100
-            if refund > 0:
-                self.incrby(coins_key, refund)
-            self.hset(coupon_key, mapping={"status": "pending", "cancelled_at": now})
-            return ["ok", str(refund)]
+            self.hset(
+                coupon_key,
+                mapping={"status": "pending", "cancelled_at": now, "locked_at": ""},
+            )
+            return ["ok", "0"]
         if "-- rewardservice:checkin" in script:
             today_key, streak_key, coins_key = keys
             if self.exists(today_key):
@@ -706,7 +694,7 @@ class RewardServiceTest(unittest.TestCase):
         self.assertEqual(cancel.status_code, 200)
         cancel_body = cancel.get_json()
         self.assertTrue(cancel_body["success"])
-        self.assertEqual(cancel_body["refund_coins"], 50)
+        self.assertEqual(cancel_body["refund_coins"], 0)
         self.assertEqual(
             self.redis.hgetall("coupon:COIN-ABC123-0001")["status"], "pending"
         )
@@ -723,8 +711,8 @@ class RewardServiceTest(unittest.TestCase):
             self.redis.hgetall("coupon:COIN-ABC123-0001")["status"], "used"
         )
 
-    def test_cancel_returns_refund_coins(self):
-        """Cancel a locked coupon should refund the coins that were spent."""
+    def test_cancel_locked_coupon_does_not_refund_coins(self):
+        """Checkout cancel restores a locked coupon without refunding spent coins."""
         self.redis.set("coins:session-1", 0)
         self.redis.hset(
             "coupon:COIN-XYZ789-0001",
@@ -744,9 +732,11 @@ class RewardServiceTest(unittest.TestCase):
         self.assertEqual(res.status_code, 200)
         body = res.get_json()
         self.assertTrue(body["success"])
-        self.assertEqual(body["refund_coins"], 100)
-        # Coins should be restored
-        self.assertEqual(int(self.redis.get("coins:session-1")), 100)
+        self.assertEqual(body["refund_coins"], 0)
+        self.assertEqual(int(self.redis.get("coins:session-1")), 0)
+        self.assertEqual(
+            self.redis.hgetall("coupon:COIN-XYZ789-0001")["status"], "pending"
+        )
 
     def test_validate_rejects_expired_coupon(self):
         """Coupon past TTL should be rejected with expired error."""
@@ -1007,6 +997,30 @@ class RewardServiceTest(unittest.TestCase):
         res = self.client.get("/metrics")
         self.assertIn(b'coupon_redeemed_total{cost="50"}', res.data)
 
+    def test_metrics_include_coupon_lifecycle_and_coin_spend(self):
+        self.redis.set("coins:metrics-coupon", 50)
+        redeem = self.client.post(
+            "/redeem", json={"session_id": "metrics-coupon", "cost": 50}
+        )
+        code = redeem.get_json()["coupon_code"]
+        self.client.post(
+            "/coupon/validate",
+            json={"session_id": "metrics-coupon", "coupon_code": code},
+        )
+        self.client.post("/coupon/cancel", json={"coupon_code": code})
+
+        res = self.client.get("/metrics")
+
+        self.assertIn(b'coin_spent_total{source="redeem"}', res.data)
+        self.assertIn(
+            b'coupon_validate_total{reason="ok",result="success",source="redeem"}',
+            res.data,
+        )
+        self.assertIn(
+            b'coupon_lifecycle_total{from_status="locked",result="success",source="redeem",to_status="pending"}',
+            res.data,
+        )
+
     def test_demo_page_is_available(self):
         res = self.client.get("/demo")
 
@@ -1118,8 +1132,8 @@ class RewardServiceTest(unittest.TestCase):
 
     # ── cancel refund for flash coupon ────────────────────────────────────── #
 
-    def test_flash_cancel_refunds_cost_coins(self):
-        """Cancel a flash coupon should refund the cost_coins stored on the coupon."""
+    def test_flash_cancel_does_not_refund_cost_coins(self):
+        """Checkout cancel restores flash coupon status without refunding coins."""
         import time as _time
         self.redis.set("coins:session-1", 10)
         original = rewardservice._current_flash_slot
@@ -1141,7 +1155,8 @@ class RewardServiceTest(unittest.TestCase):
                 "/coupon/cancel", json={"coupon_code": code}
             )
             self.assertEqual(cancel_res.status_code, 200)
-            self.assertEqual(cancel_res.get_json()["refund_coins"], 10)
+            self.assertEqual(cancel_res.get_json()["refund_coins"], 0)
+            self.assertEqual(int(self.redis.get("coins:session-1")), 0)
         finally:
             rewardservice._current_flash_slot = original
             rewardservice.FLASH_COST_COINS = 0

@@ -148,12 +148,24 @@ COUPON_REDEEMED = Counter(
     ["cost"],
 )
 COUPON_USED = Counter("coupon_used_total", "Coupons committed after checkout.")
-COUPON_CANCELLED = Counter("coupon_cancelled_total", "Coupons cancelled (refund issued).")
+COUPON_CANCELLED = Counter("coupon_cancelled_total", "Coupon lock rollbacks.")
 COUPON_VALIDATE_FAILED = Counter(
     "coupon_validate_failed_total",
     "Coupon validation failures by reason.",
     ["reason"],
 )
+COUPON_LIFECYCLE = Counter(
+    "coupon_lifecycle_total",
+    "Coupon lifecycle transitions by bounded source and status.",
+    ["source", "from_status", "to_status", "result"],
+)
+COUPON_VALIDATE_TOTAL = Counter(
+    "coupon_validate_total",
+    "Coupon validation attempts by bounded source, result, and reason.",
+    ["source", "result", "reason"],
+)
+COIN_SPENT = Counter("coin_spent_total", "Coins spent by source.", ["source"])
+COIN_REFUNDED = Counter("coin_refunded_total", "Coins refunded by source.", ["source"])
 COOLDOWN_REJECTED = Counter("cooldown_rejected_total", "Ad reward cooldown rejections.")
 RATELIMIT_REJECTED = Counter(
     "ratelimit_rejected_total", "Rate limit rejections by endpoint.", ["endpoint"]
@@ -644,6 +656,7 @@ def create_app(redis_client=None):
 
         remaining = int(result[1])
         COUPON_REDEEMED.labels(cost=str(cost)).inc()
+        COIN_SPENT.labels(source="redeem").inc(cost)
         COIN_BALANCE.set(remaining)
         # 索引优惠券到用户列表
         app.redis.lpush(_coupon_index_key(session_id), code)
@@ -665,6 +678,9 @@ def create_app(redis_client=None):
         payload = request.get_json(silent=True) or {}
         code = str(payload.get("coupon_code", "")).strip().upper()
         session_id = str(payload.get("session_id", "")).strip()
+        coupon_data = app.redis.hgetall(_coupon_key(code))
+        source = _metric_coupon_source(coupon_data)
+        from_status = _metric_coupon_status(coupon_data.get("status", "missing") if coupon_data else "missing")
         result = _eval_script(
             app.redis,
             app.lua["coupon_validate"],
@@ -673,14 +689,32 @@ def create_app(redis_client=None):
         )
         if result[0] == "not_found":
             COUPON_VALIDATE_FAILED.labels(reason="not_found").inc()
+            COUPON_VALIDATE_TOTAL.labels(
+                source=source, result="not_found", reason="not_found"
+            ).inc()
             return jsonify({"error": "coupon not found"}), 404
         if result[0] == "expired":
             COUPON_VALIDATE_FAILED.labels(reason="expired").inc()
+            COUPON_VALIDATE_TOTAL.labels(
+                source=source, result="failed", reason="expired"
+            ).inc()
             return jsonify({"error": "coupon has expired"}), 410
         if result[0] != "ok":
             COUPON_VALIDATE_FAILED.labels(reason="unavailable").inc()
+            COUPON_VALIDATE_TOTAL.labels(
+                source=source, result="failed", reason="unavailable"
+            ).inc()
             return jsonify({"error": "coupon is not available"}), 400
 
+        COUPON_VALIDATE_TOTAL.labels(
+            source=source, result="success", reason="ok"
+        ).inc()
+        COUPON_LIFECYCLE.labels(
+            source=source,
+            from_status=from_status,
+            to_status="locked",
+            result="success",
+        ).inc()
         return jsonify({"valid": True, "discount_pct": int(result[1])})
 
     # ── 优惠券核销 ────────────────────────────────────────────────────────── #
@@ -690,6 +724,9 @@ def create_app(redis_client=None):
     def coupon_commit():
         payload = request.get_json(silent=True) or {}
         code = str(payload.get("coupon_code", "")).strip().upper()
+        coupon_data = app.redis.hgetall(_coupon_key(code))
+        source = _metric_coupon_source(coupon_data)
+        from_status = _metric_coupon_status(coupon_data.get("status", "missing") if coupon_data else "missing")
         result = _eval_script(
             app.redis,
             app.lua["coupon_commit"],
@@ -697,22 +734,41 @@ def create_app(redis_client=None):
             [int(time.time())],
         )
         if result[0] == "not_found":
+            COUPON_LIFECYCLE.labels(
+                source=source,
+                from_status=from_status,
+                to_status="missing",
+                result="not_found",
+            ).inc()
             return jsonify({"error": "coupon not found"}), 404
         if result[0] != "ok":
+            COUPON_LIFECYCLE.labels(
+                source=source,
+                from_status=from_status,
+                to_status=from_status,
+                result="failed",
+            ).inc()
             return jsonify({"error": "coupon is not locked"}), 409
+        COUPON_LIFECYCLE.labels(
+            source=source,
+            from_status=from_status,
+            to_status="used",
+            result="success",
+        ).inc()
         COUPON_USED.inc()
         return jsonify({"success": True})
 
-    # ── 优惠券取消（退金币）───────────────────────────────────────────────── #
+    # ── 优惠券取消（只回滚锁券，不退金币）─────────────────────────────────── #
 
     @app.post("/coupon/cancel")
     @timed("coupon_cancel")
     def coupon_cancel():
         payload = request.get_json(silent=True) or {}
         code = str(payload.get("coupon_code", "")).strip().upper()
-        # 需要从 coupon 中读取 session_id 来退金币
         coupon_data = app.redis.hgetall(_coupon_key(code))
         session_id = coupon_data.get("session_id", "") if coupon_data else ""
+        source = _metric_coupon_source(coupon_data)
+        from_status = _metric_coupon_status(coupon_data.get("status", "missing") if coupon_data else "missing")
         result = _eval_script(
             app.redis,
             app.lua["coupon_cancel"],
@@ -720,12 +776,31 @@ def create_app(redis_client=None):
             [int(time.time())],
         )
         if result[0] == "not_found":
+            COUPON_LIFECYCLE.labels(
+                source=source,
+                from_status=from_status,
+                to_status="missing",
+                result="not_found",
+            ).inc()
             return jsonify({"error": "coupon not found"}), 404
         if result[0] != "ok":
+            COUPON_LIFECYCLE.labels(
+                source=source,
+                from_status=from_status,
+                to_status=from_status,
+                result="failed",
+            ).inc()
             return jsonify({"error": "coupon is not locked"}), 409
         refund = int(result[1])
+        COUPON_LIFECYCLE.labels(
+            source=source,
+            from_status=from_status,
+            to_status="pending",
+            result="success",
+        ).inc()
         COUPON_CANCELLED.inc()
         if refund > 0 and session_id:
+            COIN_REFUNDED.labels(source=source).inc(refund)
             COIN_BALANCE.set(_int_value(app.redis.get(_coins_key(session_id))))
             _record_transaction(app.redis, session_id, "refund", refund, f"coupon_cancel:{code}")
         return jsonify({"success": True, "refund_coins": refund})
@@ -939,6 +1014,7 @@ def create_app(redis_client=None):
         FLASH_CLAIMED.inc()
         if FLASH_COST_COINS > 0:
             COINS_EARNED.labels(source="flash_spend").inc(0)  # no-op, just tracking
+            COIN_SPENT.labels(source="flash").inc(FLASH_COST_COINS)
         COIN_BALANCE.set(balance)
         # 索引优惠券到用户列表
         app.redis.lpush(_coupon_index_key(session_id), coupon_code)
@@ -1196,6 +1272,21 @@ def _bounded_label(value, allowed_values):
         return label
     if label in allowed_values:
         return label
+    return "other"
+
+
+def _metric_coupon_source(coupon_data):
+    if not coupon_data:
+        return "unknown"
+    source = str(coupon_data.get("source", "")).strip()
+    if source in {"redeem", "flash"}:
+        return source
+    return "unknown"
+
+
+def _metric_coupon_status(status):
+    if status in {"pending", "locked", "used", "missing"}:
+        return status
     return "other"
 
 
