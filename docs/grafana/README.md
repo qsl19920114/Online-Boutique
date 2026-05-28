@@ -10,6 +10,7 @@
 | `rewardservice-checkin.json` | 📅 签到分析 | 签到趋势、连续天数、周奖励 |
 | `rewardservice-flash-rush.json` | ⚡ 秒杀 & 整点抢 | 秒杀/整点抢趋势、售罄率 |
 | `rewardservice-health.json` | 🏥 服务质量 | 接口延迟、限流、Redis 连接池 |
+| `ad-video-stability.json` | 广告视频播放稳定性 | 视频观看会话、播放事件、卡顿/错误、奖励领取、Chaos 注入 |
 
 ## 指标说明
 
@@ -20,11 +21,18 @@ rewardservice 通过 `/metrics` 端点暴露以下 Prometheus 指标：
 | 指标名 | 类型 | 说明 |
 |--------|------|------|
 | `coins_earned_total` | Counter | 看广告赚金币总数 |
-| `coin_balance_current` | Gauge | 用户金币余额（label: session_id） |
+| `coin_balance_current` | Gauge | 最新观测到的金币余额 |
 | `coupon_redeemed_total` | Counter | 优惠券兑换次数 |
 | `coupon_used_total` | Counter | 优惠券实际使用次数 |
 | `coupon_validate_failed_total` | Counter | 优惠券验证失败次数 |
 | `cooldown_rejected_total` | Counter | 广告冷却期拒绝次数 |
+| `ad_watch_session_started_total` | Counter | 视频广告观看会话创建结果（label: ad_id/creative_id/campaign_id/result） |
+| `ad_watch_event_total` | Counter | 视频播放事件上报结果（label: event/ad_id/creative_id/campaign_id/result） |
+| `ad_watch_progress_seconds` | Histogram | 服务端校验后的最大观看进度 |
+| `ad_watch_rebuffer_total` | Counter | 视频卡顿事件数 |
+| `ad_watch_error_total` | Counter | 视频播放错误数（label: error_type） |
+| `ad_reward_claim_total` | Counter | 视频广告奖励领取结果（label: stage/result） |
+| `ad_watch_fault_injected_total` | Counter | RewardService 广告观看链路 Chaos 注入次数（label: mode/path） |
 | `checkin_total` | Counter | 签到尝试（label: result=success/duplicate） |
 | `checkin_streak_histogram` | Histogram | 签到连续天数分布 |
 | `weekly_bonus_total` | Counter | 周奖励发放次数 |

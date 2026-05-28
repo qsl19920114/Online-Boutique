@@ -38,5 +38,6 @@ grep -q "name: prometheus" /tmp/online-boutique-monitoring-render.yaml
 grep -q "name: grafana" /tmp/online-boutique-monitoring-render.yaml
 grep -q "name: grafana-dashboards" /tmp/online-boutique-monitoring-render.yaml
 grep -q "rewardservice-overview.json" /tmp/online-boutique-monitoring-render.yaml
+grep -q "ad-video-stability.json" /tmp/online-boutique-monitoring-render.yaml
 
 echo "monitoring assets verified"
