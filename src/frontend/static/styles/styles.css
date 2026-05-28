@@ -635,9 +635,19 @@ similar to that of the hot-products-row.
 .reward-modal-ad-image {
   width: 100%;
   height: 200px;
+  position: relative;
+  overflow: hidden;
   background-size: cover;
   background-position: center;
   background-color: #e9ecef;
+}
+
+.reward-ad-video {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  background: #111;
 }
 
 .reward-modal-ad-text {

@@ -449,6 +449,27 @@ type rewardEarnRequest struct {
 	SessionID string `json:"session_id"`
 	AdID      string `json:"ad_id"`
 	Stage     int    `json:"stage"`
+	WatchID   string `json:"watch_id"`
+}
+
+type rewardWatchStartRequest struct {
+	SessionID  string `json:"session_id"`
+	AdID       string `json:"ad_id"`
+	CreativeID string `json:"creative_id"`
+	CampaignID string `json:"campaign_id"`
+	DurationMS int    `json:"duration_ms"`
+}
+
+type rewardWatchEventRequest struct {
+	SessionID  string `json:"session_id"`
+	WatchID    string `json:"watch_id"`
+	AdID       string `json:"ad_id"`
+	CreativeID string `json:"creative_id"`
+	CampaignID string `json:"campaign_id"`
+	Event      string `json:"event"`
+	PositionMS int    `json:"position_ms"`
+	DurationMS int    `json:"duration_ms"`
+	ErrorType  string `json:"error_type"`
 }
 
 type rewardRedeemRequest struct {
@@ -488,10 +509,11 @@ type rewardCheckinResponse struct {
 
 func (fe *frontendServer) watchAdHandler(w http.ResponseWriter, r *http.Request) {
 	var payload struct {
-		AdID   string `json:"ad_id"`
-		Stage  int    `json:"stage"`
-		Style  string `json:"style"`
-		ShowIn string `json:"show_in"`
+		AdID    string `json:"ad_id"`
+		Stage   int    `json:"stage"`
+		WatchID string `json:"watch_id"`
+		Style   string `json:"style"`
+		ShowIn  string `json:"show_in"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -507,17 +529,67 @@ func (fe *frontendServer) watchAdHandler(w http.ResponseWriter, r *http.Request)
 		SessionID: sessionID(r),
 		AdID:      payload.AdID,
 		Stage:     payload.Stage,
+		WatchID:   payload.WatchID,
 	}, &out)
 	if err != nil {
+		frontendCounterInc(`ad_watch_reward_proxy_total{result="bad_gateway"}`)
 		w.WriteHeader(http.StatusBadGateway)
 		writeJSON(w, map[string]interface{}{"ok": false, "error": err.Error()})
 		return
 	}
+	frontendCounterInc(`ad_watch_reward_proxy_total{result="success"}`)
 	if payload.Stage == 3 {
 		frontendCounterInc("ad_watch_complete_total")
 	}
 	out["ok"] = true
 	writeJSON(w, out)
+}
+
+func (fe *frontendServer) watchAdStartHandler(w http.ResponseWriter, r *http.Request) {
+	var payload rewardWatchStartRequest
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		frontendCounterInc(`ad_watch_start_proxy_total{result="bad_request"}`)
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	payload.SessionID = sessionID(r)
+	body, _ := json.Marshal(payload)
+	result, statusCode, err := fe.rewardPostRaw(r.Context(), "/ads/watch/start", body)
+	if err != nil {
+		frontendCounterInc(`ad_watch_start_proxy_total{result="bad_gateway"}`)
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	frontendCounterInc(fmt.Sprintf(`ad_watch_start_proxy_total{result="%s"}`, proxyResultLabel(statusCode)))
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
+	w.Write(result)
+}
+
+func (fe *frontendServer) watchAdEventHandler(w http.ResponseWriter, r *http.Request) {
+	var payload rewardWatchEventRequest
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		frontendCounterInc(`ad_watch_event_proxy_total{event="unknown",result="bad_request"}`)
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	payload.SessionID = sessionID(r)
+	body, _ := json.Marshal(payload)
+	result, statusCode, err := fe.rewardPostRaw(r.Context(), "/ads/watch/event", body)
+	eventLabel := watchEventMetricLabel(payload.Event)
+	if err != nil {
+		frontendCounterInc(fmt.Sprintf(`ad_watch_event_proxy_total{event="%s",result="bad_gateway"}`, eventLabel))
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	frontendCounterInc(fmt.Sprintf(
+		`ad_watch_event_proxy_total{event="%s",result="%s"}`,
+		eventLabel,
+		proxyResultLabel(statusCode),
+	))
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
+	w.Write(result)
 }
 
 func (fe *frontendServer) adStageConfigHandler(w http.ResponseWriter, r *http.Request) {
@@ -687,6 +759,9 @@ func (fe *frontendServer) metricsHandler(w http.ResponseWriter, r *http.Request)
 	fmt.Fprintln(w, "# TYPE page_view_total counter")
 	fmt.Fprintln(w, "# TYPE ad_click_total counter")
 	fmt.Fprintln(w, "# TYPE ad_watch_complete_total counter")
+	fmt.Fprintln(w, "# TYPE ad_watch_start_proxy_total counter")
+	fmt.Fprintln(w, "# TYPE ad_watch_event_proxy_total counter")
+	fmt.Fprintln(w, "# TYPE ad_watch_reward_proxy_total counter")
 	fmt.Fprintln(w, "# TYPE coupon_apply_total counter")
 	fmt.Fprintln(w, "# TYPE checkout_success_total counter")
 	fmt.Fprintln(w, "# TYPE checkout_failure_total counter")
@@ -856,6 +931,24 @@ func sanitizeMetricLabel(value string) string {
 		return "unknown"
 	}
 	return out.String()
+}
+
+func watchEventMetricLabel(event string) string {
+	switch strings.ToLower(strings.TrimSpace(event)) {
+	case "":
+		return "unknown"
+	case "loadedmetadata", "playing", "timeupdate", "waiting", "pause", "ended", "error":
+		return strings.ToLower(strings.TrimSpace(event))
+	default:
+		return "other"
+	}
+}
+
+func proxyResultLabel(statusCode int) string {
+	if statusCode >= 200 && statusCode < 300 {
+		return "success"
+	}
+	return fmt.Sprintf("status_%d", statusCode)
 }
 
 func (fe *frontendServer) logoutHandler(w http.ResponseWriter, r *http.Request) {

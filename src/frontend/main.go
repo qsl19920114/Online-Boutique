@@ -158,6 +158,8 @@ func main() {
 	r.HandleFunc(baseUrl+"/logout", svc.logoutHandler).Methods(http.MethodGet)
 	r.HandleFunc(baseUrl+"/cart/checkout", svc.placeOrderHandler).Methods(http.MethodPost)
 	r.HandleFunc(baseUrl+"/assistant", svc.assistantHandler).Methods(http.MethodGet)
+	r.HandleFunc(baseUrl+"/ads/watch/start", svc.watchAdStartHandler).Methods(http.MethodPost)
+	r.HandleFunc(baseUrl+"/ads/watch/event", svc.watchAdEventHandler).Methods(http.MethodPost)
 	r.HandleFunc(baseUrl+"/ads/watch", svc.watchAdHandler).Methods(http.MethodPost)
 	r.HandleFunc(baseUrl+"/ads/stage-config", svc.adStageConfigHandler).Methods(http.MethodGet)
 	r.HandleFunc(baseUrl+"/rewards", svc.rewardsPageHandler).Methods(http.MethodGet)

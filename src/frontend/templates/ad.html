@@ -29,9 +29,14 @@
             </a>
         </div>
         <button class="cymbal-button-primary reward-ad-button" type="button"
-            data-ad-id="{{.ad.Text}}"
+            data-ad-id="{{if .ad.AdId}}{{.ad.AdId}}{{else}}{{.ad.Text}}{{end}}"
             data-ad-text="{{.ad.Text}}"
             data-ad-url="{{$.baseUrl}}{{.ad.RedirectUrl}}"
+            data-creative-id="{{.ad.CreativeId}}"
+            data-campaign-id="{{.ad.CampaignId}}"
+            data-video-url="{{.ad.VideoUrl}}"
+            data-poster-url="{{.ad.PosterUrl}}"
+            data-duration-ms="{{.ad.DurationMs}}"
             data-ad-style="banner"
             data-ad-show-in="product">
             Watch ad, earn coins
@@ -50,9 +55,14 @@
             <span>Sponsored</span>
             <h4>{{ .ad.Text }}</h4>
             <button class="cymbal-button-primary reward-ad-button" type="button"
-                data-ad-id="{{.ad.Text}}"
+                data-ad-id="{{if .ad.AdId}}{{.ad.AdId}}{{else}}{{.ad.Text}}{{end}}"
                 data-ad-text="{{.ad.Text}}"
                 data-ad-url="{{$.baseUrl}}{{.ad.RedirectUrl}}"
+                data-creative-id="{{.ad.CreativeId}}"
+                data-campaign-id="{{.ad.CampaignId}}"
+                data-video-url="{{.ad.VideoUrl}}"
+                data-poster-url="{{.ad.PosterUrl}}"
+                data-duration-ms="{{.ad.DurationMs}}"
                 data-ad-style="card"
                 data-ad-show-in="home">
                 Earn coins
@@ -72,9 +82,14 @@
             <span>Sponsored reward</span>
             <h4>{{ .ad.Text }}</h4>
             <button class="cymbal-button-primary reward-ad-button" type="button"
-                data-ad-id="{{.ad.Text}}"
+                data-ad-id="{{if .ad.AdId}}{{.ad.AdId}}{{else}}{{.ad.Text}}{{end}}"
                 data-ad-text="{{.ad.Text}}"
                 data-ad-url="{{$.baseUrl}}{{.ad.RedirectUrl}}"
+                data-creative-id="{{.ad.CreativeId}}"
+                data-campaign-id="{{.ad.CampaignId}}"
+                data-video-url="{{.ad.VideoUrl}}"
+                data-poster-url="{{.ad.PosterUrl}}"
+                data-duration-ms="{{.ad.DurationMs}}"
                 data-ad-style="wide-card"
                 data-ad-show-in="recommendations">
                 Watch for coins
@@ -93,9 +108,14 @@
         <strong>{{ .ad.Text }}</strong>
     </div>
     <button class="cymbal-button-primary reward-ad-button" type="button"
-        data-ad-id="{{.ad.Text}}"
+        data-ad-id="{{if .ad.AdId}}{{.ad.AdId}}{{else}}{{.ad.Text}}{{end}}"
         data-ad-text="{{.ad.Text}}"
         data-ad-url="{{$.baseUrl}}{{.ad.RedirectUrl}}"
+        data-creative-id="{{.ad.CreativeId}}"
+        data-campaign-id="{{.ad.CampaignId}}"
+        data-video-url="{{.ad.VideoUrl}}"
+        data-poster-url="{{.ad.PosterUrl}}"
+        data-duration-ms="{{.ad.DurationMs}}"
         data-ad-style="compact"
         data-ad-show-in="cart">
         Earn
@@ -107,9 +127,14 @@
 {{ define "ad_float" }}
 {{ if $.ad }}
 <button class="reward-ad-float reward-ad-button" type="button"
-    data-ad-id="{{.ad.Text}}"
+    data-ad-id="{{if .ad.AdId}}{{.ad.AdId}}{{else}}{{.ad.Text}}{{end}}"
     data-ad-text="{{.ad.Text}}"
     data-ad-url="{{$.baseUrl}}{{.ad.RedirectUrl}}"
+    data-creative-id="{{.ad.CreativeId}}"
+    data-campaign-id="{{.ad.CampaignId}}"
+    data-video-url="{{.ad.VideoUrl}}"
+    data-poster-url="{{.ad.PosterUrl}}"
+    data-duration-ms="{{.ad.DurationMs}}"
     data-ad-style="float"
     data-ad-show-in="global"
     title="Watch ad, earn coins">
@@ -128,9 +153,14 @@
         <p>{{ .ad.Text }}</p>
     </div>
     <button class="cymbal-button-primary reward-ad-button" type="button"
-        data-ad-id="{{.ad.Text}}"
+        data-ad-id="{{if .ad.AdId}}{{.ad.AdId}}{{else}}{{.ad.Text}}{{end}}"
         data-ad-text="{{.ad.Text}}"
         data-ad-url="{{$.baseUrl}}{{.ad.RedirectUrl}}"
+        data-creative-id="{{.ad.CreativeId}}"
+        data-campaign-id="{{.ad.CampaignId}}"
+        data-video-url="{{.ad.VideoUrl}}"
+        data-poster-url="{{.ad.PosterUrl}}"
+        data-duration-ms="{{.ad.DurationMs}}"
         data-ad-style="thank"
         data-ad-show-in="order">
         Watch and earn coins
@@ -145,7 +175,9 @@
     <div class="reward-modal" role="dialog" aria-modal="true">
         <div class="reward-modal-ad" id="reward-ad-area">
             <span class="reward-modal-ad-badge">Sponsored</span>
-            <div class="reward-modal-ad-image" id="reward-ad-image"></div>
+            <div class="reward-modal-ad-image" id="reward-ad-image">
+                <video id="reward-ad-video" class="reward-ad-video" playsinline preload="metadata"></video>
+            </div>
             <div class="reward-modal-ad-text">
                 <span id="reward-ad-headline"></span>
                 <a id="reward-ad-link" href="#" rel="nofollow noopener noreferrer" target="_blank"
@@ -181,6 +213,7 @@
 
     const backdrop    = document.getElementById('reward-modal-backdrop');
     const adImage     = document.getElementById('reward-ad-image');
+    const adVideo     = document.getElementById('reward-ad-video');
     const adHeadline  = document.getElementById('reward-ad-headline');
     const adLink      = document.getElementById('reward-ad-link');
     const title       = document.getElementById('reward-modal-title');
@@ -192,22 +225,13 @@
     const exitButton  = document.getElementById('reward-exit-button');
     const continueButton = document.getElementById('reward-continue-button');
 
-    const adImages = [
-        '{{$.baseUrl}}/static/img/products/watch.jpg',
-        '{{$.baseUrl}}/static/img/products/sunglasses.jpg',
-        '{{$.baseUrl}}/static/img/products/loafers.jpg',
-        '{{$.baseUrl}}/static/img/products/hairdryer.jpg',
-        '{{$.baseUrl}}/static/img/products/candle-holder.jpg',
-        '{{$.baseUrl}}/static/img/products/bamboo-glass-jar.jpg',
-        '{{$.baseUrl}}/static/img/products/mug.jpg',
-        '{{$.baseUrl}}/static/img/products/tank-top.jpg'
-    ];
-
     let activeButton = null;
     let config = null;
-    let elapsed = 0;
-    let timer = null;
+    let watchId = '';
     let checkpoint = null;
+    let unlockedStage = 0;
+    let lastTimeupdateSent = 0;
+    let rewardSubmitted = false;
 
     buttons.forEach(function (button) {
         button.addEventListener('click', function () {
@@ -221,38 +245,85 @@
         progress.style.width = '0%';
         timerEl.textContent = '';
         stageList.innerHTML = '';
+        checkpoint = null;
+        unlockedStage = 0;
+        lastTimeupdateSent = 0;
+        rewardSubmitted = false;
+        watchId = '';
         skipButton.style.display = '';
         exitButton.style.display = 'none';
         continueButton.style.display = 'none';
+        exitButton.textContent = 'Claim now';
+        continueButton.textContent = 'Continue';
         exitButton.hidden = false;
         continueButton.hidden = false;
+        adVideo.pause();
+        adVideo.removeAttribute('src');
+        adVideo.removeAttribute('poster');
+        adVideo.load();
+    }
+
+    function resolveAssetUrl(url, fallback) {
+        const value = (url || '').trim();
+        if (!value) return fallback;
+        if (/^(https?:)?\/\//i.test(value)) return value;
+        if (value.charAt(0) === '/') return '{{$.baseUrl}}' + value;
+        return value;
     }
 
     async function openRewardModal(button) {
         activeButton = button;
-        window.clearInterval(timer);
         resetModal();
+        adHeadline.textContent = button.dataset.adText || button.dataset.adId || 'Special offer';
+        adLink.href = button.dataset.adUrl || '#';
+        const poster = resolveAssetUrl(button.dataset.posterUrl, '{{$.baseUrl}}/static/images/AdvertBannerImage.png');
+        const videoUrl = resolveAssetUrl(button.dataset.videoUrl, '');
+        adImage.style.backgroundImage = 'url(' + poster + ')';
+        adVideo.poster = poster;
+        if (videoUrl) {
+            adVideo.src = videoUrl;
+        } else {
+            adVideo.removeAttribute('src');
+        }
+        backdrop.hidden = false;
+
         try {
-            const res = await fetch('{{$.baseUrl}}/ads/stage-config');
+            const res = await fetch('{{$.baseUrl}}/ads/watch/start', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    ad_id: button.dataset.adId || 'default-ad',
+                    creative_id: button.dataset.creativeId || 'unknown',
+                    campaign_id: button.dataset.campaignId || 'unknown',
+                    duration_ms: Number(button.dataset.durationMs || 30000)
+                })
+            });
             config = await res.json();
+            if (!res.ok || !config.watch_id) throw new Error(config.error || 'watch_start_failed');
+            watchId = config.watch_id;
+            if (!config.stages && config.stage_config) config.stages = config.stage_config.stages;
+            if (!Array.isArray(config.stages) || !config.stages.length) throw new Error('stage_config_missing');
         } catch (err) {
             title.textContent = 'Reward service unavailable';
             copy.textContent = 'Please try again in a moment.';
-            backdrop.hidden = false;
             return;
         }
-        elapsed = 0;
-        checkpoint = null;
 
-        const img = adImages[Math.floor(Math.random() * adImages.length)];
-        adImage.style.backgroundImage = 'url(' + img + ')';
-        adHeadline.textContent = button.dataset.adText || button.dataset.adId || 'Special offer';
-        adLink.href = button.dataset.adUrl || '#';
         renderStages();
-
-        backdrop.hidden = false;
-        tick();
-        timer = window.setInterval(tick, 1000);
+        updateProgressFromVideo();
+        if (!videoUrl) {
+            title.textContent = 'Video unavailable';
+            copy.textContent = 'Please try another ad in a moment.';
+            return;
+        }
+        adVideo.load();
+        adVideo.play().catch(function () {
+            title.textContent = 'Press continue to play';
+            copy.textContent = 'Your browser needs one more tap to start the ad.';
+            continueButton.textContent = 'Play';
+            continueButton.style.display = '';
+            skipButton.style.display = '';
+        });
     }
 
     function renderStages() {
@@ -266,7 +337,7 @@
     }
 
     skipButton.addEventListener('click', function () {
-        window.clearInterval(timer);
+        adVideo.pause();
         backdrop.hidden = true;
     });
 
@@ -276,34 +347,74 @@
         exitButton.style.display = 'none';
         skipButton.style.display = '';
         title.textContent = 'Watch ad, earn coins';
-        timer = window.setInterval(tick, 1000);
+        adVideo.play().catch(function () {
+            title.textContent = 'Press continue to play';
+        });
     });
 
     exitButton.addEventListener('click', function () {
         if (checkpoint) submitEarn(checkpoint.stage);
     });
 
-    async function tick() {
-        elapsed += 1;
+    adVideo.addEventListener('loadedmetadata', function () { sendWatchEvent('loadedmetadata'); });
+    adVideo.addEventListener('playing', function () { sendWatchEvent('playing'); });
+    adVideo.addEventListener('waiting', function () { sendWatchEvent('waiting'); });
+    adVideo.addEventListener('pause', function () {
+        if (!checkpoint && !rewardSubmitted && !backdrop.hidden) sendWatchEvent('pause');
+    });
+    adVideo.addEventListener('ended', function () {
+        handleStageProgress(true);
+    });
+    adVideo.addEventListener('error', function () {
+        sendWatchEvent('error', 'media');
+        title.textContent = 'Video failed to play';
+        copy.textContent = 'Please try another ad in a moment.';
+        skipButton.style.display = '';
+        exitButton.hidden = true;
+        continueButton.hidden = true;
+    });
+    adVideo.addEventListener('timeupdate', function () {
+        updateProgressFromVideo();
+        const now = Date.now();
+        if (now - lastTimeupdateSent > 1000) {
+            lastTimeupdateSent = now;
+            sendWatchEvent('timeupdate');
+        }
+        handleStageProgress(false);
+    });
+
+    function updateProgressFromVideo() {
+        if (!config || !config.stages || !config.stages.length) return;
         const total = config.stages[config.stages.length - 1].trigger_sec;
+        const elapsed = Math.min(total, Math.floor(adVideo.currentTime || 0));
         const remaining = Math.max(0, total - elapsed);
         progress.style.width = Math.min(100, elapsed / total * 100) + '%';
         timerEl.textContent = remaining > 0 ? 'Ad ends in ' + remaining + 's' : '';
+    }
 
-        checkpoint = config.stages.find(function (s) { return s.trigger_sec === elapsed; });
-        if (!checkpoint) return;
-        markStage(checkpoint.stage);
-        window.clearInterval(timer);
+    async function handleStageProgress(fromEnded) {
+        if (!config || !config.stages || checkpoint || rewardSubmitted) return;
+        const currentSeconds = adVideo.currentTime || 0;
+        const reached = config.stages.filter(function (stage) {
+            return currentSeconds >= stage.trigger_sec;
+        }).pop();
+        if (!reached || reached.stage <= unlockedStage) return;
 
-        if (checkpoint.stage === config.stages[config.stages.length - 1].stage) {
-            await submitEarn(checkpoint.stage);
+        checkpoint = reached;
+        unlockedStage = reached.stage;
+        markStage(reached.stage);
+        adVideo.pause();
+        await sendWatchEvent(fromEnded ? 'ended' : 'timeupdate');
+
+        if (reached.stage === config.stages[config.stages.length - 1].stage) {
+            submitEarn(reached.stage);
             return;
         }
 
         const maxCoins = config.stages[config.stages.length - 1].coins;
-        title.textContent = 'Unlocked ' + checkpoint.coins + ' coins';
+        title.textContent = 'Unlocked ' + reached.coins + ' coins';
         copy.textContent = 'Claim now, or keep watching to earn up to ' + maxCoins + ' coins.';
-        exitButton.textContent = 'Claim ' + checkpoint.coins + ' coins';
+        exitButton.textContent = 'Claim ' + reached.coins + ' coins';
         continueButton.textContent = 'Keep watching';
         skipButton.style.display = 'none';
         exitButton.style.display = '';
@@ -318,19 +429,44 @@
         });
     }
 
+    async function sendWatchEvent(eventName, errorType) {
+        if (!watchId || !activeButton) return false;
+        try {
+            const res = await fetch('{{$.baseUrl}}/ads/watch/event', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    watch_id: watchId,
+                    ad_id: activeButton.dataset.adId || 'default-ad',
+                    creative_id: activeButton.dataset.creativeId || 'unknown',
+                    campaign_id: activeButton.dataset.campaignId || 'unknown',
+                    event: eventName,
+                    position_ms: Math.floor((adVideo.currentTime || 0) * 1000),
+                    duration_ms: Number(activeButton.dataset.durationMs || 30000),
+                    error_type: errorType || ''
+                })
+            });
+            return res.ok;
+        } catch (err) {
+            return false;
+        }
+    }
+
     async function submitEarn(stage) {
+        rewardSubmitted = true;
+        adVideo.pause();
         const res = await fetch('{{$.baseUrl}}/ads/watch', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({
                 ad_id: activeButton.dataset.adId || 'default-ad',
                 stage: stage,
+                watch_id: watchId,
                 style: activeButton.dataset.adStyle || 'unknown',
                 show_in: activeButton.dataset.adShowIn || 'unknown'
             })
         });
         const data = await res.json();
-        window.clearInterval(timer);
         if (data.ok && typeof data.balance !== 'undefined') {
             const balanceEl = document.querySelector('.reward-balance');
             if (balanceEl) balanceEl.textContent = data.balance;
@@ -346,6 +482,7 @@
                 resetModal();
             }, 2000);
         } else {
+            rewardSubmitted = false;
             title.textContent = 'Reward not available';
             copy.textContent = data.error || 'Please try another ad in a moment.';
             timerEl.textContent = '';
