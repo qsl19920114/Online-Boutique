@@ -99,6 +99,15 @@ host.docker.internal:8091/metrics
 host.docker.internal:8080/metrics
 ```
 
+如果使用 Docker Compose 全栈运行，也可以让 Prometheus 直接接入 compose 网络：
+
+```bash
+REWARD_TARGET=rewardservice:8080 \
+FRONTEND_TARGET=frontend:8080 \
+APP_NETWORK=online-boutique_default \
+./scripts/run-monitoring-local-docker.sh
+```
+
 ### 方式二：Kubernetes 部署
 
 当前项目已经提供自包含的 Kubernetes 监控栈，不依赖 Prometheus Operator：

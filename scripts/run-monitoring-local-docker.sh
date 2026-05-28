@@ -5,6 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORK_DIR="$ROOT_DIR/.monitoring-local"
 REWARD_TARGET="${REWARD_TARGET:-host.docker.internal:8091}"
 FRONTEND_TARGET="${FRONTEND_TARGET:-host.docker.internal:8080}"
+APP_NETWORK="${APP_NETWORK:-}"
 PROMETHEUS_IMAGE="${PROMETHEUS_IMAGE:-prom/prometheus:v2.55.1}"
 GRAFANA_IMAGE="${GRAFANA_IMAGE:-grafana/grafana:11.3.1}"
 PROMETHEUS_CONTAINER="${PROMETHEUS_CONTAINER:-online-boutique-prometheus}"
@@ -79,6 +80,14 @@ docker run -d \
   -v "$WORK_DIR/prometheus.yml:/etc/prometheus/prometheus.yml:ro" \
   "$PROMETHEUS_IMAGE" >/dev/null
 
+if [[ -n "$APP_NETWORK" ]]; then
+  if docker network inspect "$APP_NETWORK" >/dev/null 2>&1; then
+    docker network connect "$APP_NETWORK" "$PROMETHEUS_CONTAINER" >/dev/null 2>&1 || true
+  else
+    echo "warning: Docker network not found: $APP_NETWORK" >&2
+  fi
+fi
+
 docker run -d \
   --name "$GRAFANA_CONTAINER" \
   --add-host=host.docker.internal:host-gateway \
@@ -109,6 +118,9 @@ RewardService target:
 
 Frontend target:
   http://$FRONTEND_TARGET/metrics
+
+Application network:
+  ${APP_NETWORK:-not connected}
 
 Stop:
   docker rm -f $PROMETHEUS_CONTAINER $GRAFANA_CONTAINER

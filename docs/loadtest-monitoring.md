@@ -29,6 +29,15 @@ The local Prometheus configuration scrapes both `host.docker.internal:8091`
 for RewardService metrics and `host.docker.internal:8080` for frontend
 promotion/coupon proxy metrics.
 
+When the full Docker Compose stack is running, use the compose network directly:
+
+```bash
+REWARD_TARGET=rewardservice:8080 \
+FRONTEND_TARGET=frontend:8080 \
+APP_NETWORK=online-boutique_default \
+./scripts/run-monitoring-local-docker.sh
+```
+
 If the full frontend is running locally, a direct Locust smoke run can generate
 traffic against it:
 
