@@ -1,0 +1,159 @@
+{{ define "flash" }}
+{{ template "header" . }}
+<main class="flash-page container">
+    <div class="flash-hero">
+        <h2>⚡ 限时秒杀</h2>
+        <p>每 2 小时一场，限量优惠券先到先得</p>
+        <a href="{{ $.baseUrl }}/rewards" class="cymbal-button-secondary" style="margin-left:12px">返回奖励中心</a>
+    </div>
+
+    <div class="flash-status-card" id="flash-status-card">
+        <div id="flash-status-body">加载中...</div>
+    </div>
+
+    <div class="flash-history">
+        <h4>我的秒杀记录</h4>
+        <div id="flash-history-list"></div>
+    </div>
+</main>
+
+<script>
+(function () {
+    var statusBody = document.getElementById('flash-status-body');
+    var historyList = document.getElementById('flash-history-list');
+
+    function formatSec(sec) {
+        var h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+        if (h > 0) return h + 'h ' + m + 'm';
+        return m + ':' + (s < 10 ? '0' : '') + s;
+    }
+
+    function renderStatus() {
+        fetch('/ads/flash/status')
+            .then(function (r) { return r.json(); })
+            .then(function (d) {
+                if (d.active) {
+                    var pct = Math.round((d.remaining / d.total) * 100);
+                    statusBody.innerHTML =
+                        '<div class="flash-active">' +
+                            '<div class="flash-discount">⚡ ' + d.discount_pct + '折优惠券</div>' +
+                            '<div class="flash-stock">' +
+                                '<div class="flash-stock-bar"><div class="flash-stock-fill" style="width:' + pct + '%"></div></div>' +
+                                '<span>剩余 <strong id="flash-remaining">' + d.remaining + '</strong> / ' + d.total + ' 张</span>' +
+                            '</div>' +
+                            '<div class="flash-ends">距结束 <span id="flash-countdown">' + formatSec(d.ends_in_sec) + '</span></div>' +
+                            (d.claimed
+                                ? '<div class="flash-claimed-badge">✅ 本场已领取</div>'
+                                : '<button class="cymbal-button-primary flash-claim-btn" id="flash-claim-btn">立即抢购</button>') +
+                        '</div>';
+
+                    if (!d.claimed) {
+                        var btn = document.getElementById('flash-claim-btn');
+                        btn.addEventListener('click', function () {
+                            claimWithFeedback(btn, statusBody, function () {
+                                return fetch('/ads/flash/claim', { method: 'POST' });
+                            });
+                        });
+                    }
+
+                    // 倒计时 + 库存实时刷新
+                    var left = d.ends_in_sec;
+                    var countdownTimer = setInterval(function () {
+                        left--;
+                        var cdEl = document.getElementById('flash-countdown');
+                        if (cdEl) cdEl.textContent = formatSec(Math.max(0, left));
+                        if (left <= 0) { clearInterval(countdownTimer); renderStatus(); return; }
+                        // 每 5 秒刷新库存
+                        if (left % 5 === 0) {
+                            fetch('/ads/flash/status').then(function (r) { return r.json(); }).then(function (nd) {
+                                var remEl = document.getElementById('flash-remaining');
+                                if (remEl) remEl.textContent = nd.remaining;
+                            });
+                        }
+                    }, 1000);
+                } else {
+                    statusBody.innerHTML =
+                        '<div class="flash-inactive">' +
+                            '<div class="flash-next">下场秒杀</div>' +
+                            '<div class="flash-next-countdown" id="flash-next-cd">' + formatSec(d.next_in_sec) + '</div>' +
+                            '<p>每逢 0/2/4/6/8/10/12/14/16/18/20/22 时整点开始</p>' +
+                        '</div>';
+                    var left = d.next_in_sec;
+                    var countdownTimer = setInterval(function () {
+                        left--;
+                        var cdEl = document.getElementById('flash-next-cd');
+                        if (cdEl) cdEl.textContent = formatSec(Math.max(0, left));
+                        if (left <= 0) { clearInterval(countdownTimer); renderStatus(); }
+                    }, 1000);
+                }
+            })
+            .catch(function () {
+                statusBody.innerHTML = '<div class="flash-inactive">加载失败，请刷新重试</div>';
+            });
+    }
+
+    // 统一抢购反馈函数
+    function claimWithFeedback(btn, infoEl, fetchFn) {
+        if (btn.disabled) return;
+        btn.disabled = true;
+        var originalText = btn.textContent;
+        btn.textContent = '抢购中...';
+
+        fetchFn()
+            .then(function (r) { return r.json(); })
+            .then(function (d) {
+                if (d.coupon_code) {
+                    btn.textContent = '✅ 已抢到';
+                    infoEl.innerHTML = '🎉 券码：<strong>' + d.coupon_code + '</strong>（' + d.discount_pct + '折）' +
+                        ' <a href="{{ $.baseUrl }}/cart" style="margin-left:8px">立即使用 →</a>';
+                    var wallet = JSON.parse(localStorage.getItem('my_coupons') || '[]');
+                    wallet.unshift({ coupon_code: d.coupon_code, discount_pct: d.discount_pct, source: 'flash', claimed_at: Date.now() });
+                    localStorage.setItem('my_coupons', JSON.stringify(wallet.slice(0, 20)));
+                } else {
+                    var errMap = {
+                        sold_out: '😢 已售罄，下次早点来',
+                        already_claimed: '✅ 本场已领取',
+                        no_active_flash: '⏰ 活动已结束',
+                        rate_limited: '⚠️ 操作太频繁，稍后再试',
+                    };
+                    infoEl.textContent = errMap[d.error] || ('失败：' + (d.error || '未知'));
+                    if (d.error !== 'sold_out' && d.error !== 'already_claimed') {
+                        setTimeout(function () { btn.disabled = false; btn.textContent = originalText; }, 3000);
+                    }
+                }
+            })
+            .catch(function () {
+                infoEl.textContent = '网络异常，请重试';
+                setTimeout(function () { btn.disabled = false; btn.textContent = originalText; }, 3000);
+            });
+    }
+
+    // 渲染历史记录（来自 localStorage）
+    function renderHistory() {
+        var wallet = JSON.parse(localStorage.getItem('my_coupons') || '[]');
+        var flash = wallet.filter(function (c) { return c.source === 'flash'; });
+        if (flash.length === 0) {
+            historyList.innerHTML = '<div class="flash-history-empty">暂无秒杀记录</div>';
+            return;
+        }
+        historyList.innerHTML = flash.map(function (c) {
+            return '<div class="flash-history-item">' +
+                '<span class="flash-history-code">' + c.coupon_code + '</span>' +
+                '<span class="flash-history-discount">' + (100 - c.discount_pct) + '% OFF</span>' +
+                '<span class="flash-history-time">' + new Date(c.claimed_at).toLocaleString() + '</span>' +
+                '<button onclick="useCoupon(\'' + c.coupon_code + '\')" class="cymbal-button-secondary">去使用</button>' +
+            '</div>';
+        }).join('');
+    }
+
+    window.useCoupon = function (code) {
+        sessionStorage.setItem('pending_coupon', code);
+        window.location.href = '{{ $.baseUrl }}/cart';
+    };
+
+    renderStatus();
+    renderHistory();
+})();
+</script>
+{{ template "footer" . }}
+{{ end }}

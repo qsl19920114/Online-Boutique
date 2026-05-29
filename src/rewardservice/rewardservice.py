@@ -467,6 +467,27 @@ def create_app(redis_client=None):
             _record_transaction(app.redis, session_id, "refund", refund, f"coupon_cancel:{code}")
         return jsonify({"success": True, "refund_coins": refund})
 
+    # ── 优惠券只读查询（供结账页预览，不改变状态）──────────────────────────── #
+
+    @app.get("/coupon/info")
+    @timed("coupon_info")
+    def coupon_info():
+        code = str(request.args.get("code", "")).strip().upper()
+        if not code:
+            return jsonify({"valid": False, "error": "missing code"}), 400
+        coupon = app.redis.hgetall(_coupon_key(code))
+        if not coupon:
+            return jsonify({"valid": False, "error": "coupon not found"}), 404
+        status = coupon.get("status", "")
+        if status != "pending":
+            return jsonify({"valid": False, "error": "coupon not available", "status": status}), 400
+        return jsonify({
+            "valid": True,
+            "discount_pct": _int_value(coupon.get("discount_pct")),
+            "source": coupon.get("source", "redeem"),
+            "cost_coins": _int_value(coupon.get("cost_coins")),
+        })
+
     # ── 签到状态 ──────────────────────────────────────────────────────────── #
 
     @app.get("/checkin/status")

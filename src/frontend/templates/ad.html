@@ -145,7 +145,12 @@
     <div class="reward-modal" role="dialog" aria-modal="true">
         <div class="reward-modal-ad" id="reward-ad-area">
             <span class="reward-modal-ad-badge">Sponsored</span>
-            <div class="reward-modal-ad-image" id="reward-ad-image"></div>
+            <div class="reward-modal-ad-image" id="reward-ad-image">
+                <video id="reward-ad-video" muted playsinline style="width:100%;height:100%;object-fit:cover;display:none">
+                    <source src="" type="video/mp4" id="reward-ad-video-src">
+                </video>
+                <div id="reward-ad-img-fallback" style="width:100%;height:100%;background-size:cover;background-position:center"></div>
+            </div>
             <div class="reward-modal-ad-text">
                 <span id="reward-ad-headline"></span>
                 <a id="reward-ad-link" href="#" rel="nofollow noopener noreferrer" target="_blank"
@@ -181,6 +186,9 @@
 
     const backdrop    = document.getElementById('reward-modal-backdrop');
     const adImage     = document.getElementById('reward-ad-image');
+    const adVideo     = document.getElementById('reward-ad-video');
+    const adVideoSrc  = document.getElementById('reward-ad-video-src');
+    const imgFallback = document.getElementById('reward-ad-img-fallback');
     const adHeadline  = document.getElementById('reward-ad-headline');
     const adLink      = document.getElementById('reward-ad-link');
     const title       = document.getElementById('reward-modal-title');
@@ -203,11 +211,18 @@
         '{{$.baseUrl}}/static/img/products/tank-top.jpg'
     ];
 
+    // 视频素材列表（fallback 到图片）
+    const adVideos = [
+        '{{$.baseUrl}}/static/video/ad1.mp4',
+        '{{$.baseUrl}}/static/video/ad2.mp4'
+    ];
+
     let activeButton = null;
     let config = null;
     let elapsed = 0;
     let timer = null;
     let checkpoint = null;
+    let useVideo = false;
 
     buttons.forEach(function (button) {
         button.addEventListener('click', function () {
@@ -226,6 +241,10 @@
         continueButton.style.display = 'none';
         exitButton.hidden = false;
         continueButton.hidden = false;
+        adVideo.pause();
+        adVideo.style.display = 'none';
+        imgFallback.style.display = '';
+        imgFallback.style.backgroundImage = '';
     }
 
     async function openRewardModal(button) {
@@ -244,15 +263,81 @@
         elapsed = 0;
         checkpoint = null;
 
-        const img = adImages[Math.floor(Math.random() * adImages.length)];
-        adImage.style.backgroundImage = 'url(' + img + ')';
         adHeadline.textContent = button.dataset.adText || button.dataset.adId || 'Special offer';
         adLink.href = button.dataset.adUrl || '#';
-        renderStages();
 
+        // 尝试加载视频，失败则降级为图片
+        useVideo = false;
+        var videoUrl = adVideos[Math.floor(Math.random() * adVideos.length)];
+        if (videoUrl) {
+            adVideoSrc.src = videoUrl;
+            adVideo.load();
+            adVideo.currentTime = 0;
+            adVideo.style.display = '';
+            imgFallback.style.display = 'none';
+            adVideo.play().then(function () {
+                useVideo = true;
+            }).catch(function () {
+                // 浏览器拦截自动播放，降级为图片
+                adVideo.style.display = 'none';
+                imgFallback.style.display = '';
+                imgFallback.style.backgroundImage = 'url(' + adImages[Math.floor(Math.random() * adImages.length)] + ')';
+            });
+        } else {
+            var img = adImages[Math.floor(Math.random() * adImages.length)];
+            imgFallback.style.backgroundImage = 'url(' + img + ')';
+        }
+
+        renderStages();
         backdrop.hidden = false;
-        tick();
-        timer = window.setInterval(tick, 1000);
+
+        if (useVideo) {
+            // 视频模式：用 timeupdate 驱动计时
+            adVideo.ontimeupdate = function () {
+                var newElapsed = Math.floor(adVideo.currentTime);
+                if (newElapsed !== elapsed) {
+                    elapsed = newElapsed;
+                    tickLogic();
+                }
+            };
+        } else {
+            // 图片降级模式：用 setInterval
+            tickLogic();
+            timer = window.setInterval(function () {
+                elapsed += 1;
+                tickLogic();
+            }, 1000);
+        }
+    }
+
+    function tickLogic() {
+        if (!config) return;
+        var total = config.stages[config.stages.length - 1].trigger_sec;
+        var remaining = Math.max(0, total - elapsed);
+        progress.style.width = Math.min(100, elapsed / total * 100) + '%';
+        timerEl.textContent = remaining > 0 ? 'Ad ends in ' + remaining + 's' : '';
+
+        var stageHit = config.stages.find(function (s) { return s.trigger_sec === elapsed; });
+        if (!stageHit) return;
+
+        checkpoint = stageHit;
+        markStage(checkpoint.stage);
+        if (useVideo) adVideo.pause();
+        window.clearInterval(timer);
+
+        if (checkpoint.stage === config.stages[config.stages.length - 1].stage) {
+            submitEarn(checkpoint.stage);
+            return;
+        }
+
+        var maxCoins = config.stages[config.stages.length - 1].coins;
+        title.textContent = 'Unlocked ' + checkpoint.coins + ' coins';
+        copy.textContent = 'Claim now, or keep watching to earn up to ' + maxCoins + ' coins.';
+        exitButton.textContent = 'Claim ' + checkpoint.coins + ' coins';
+        continueButton.textContent = 'Keep watching';
+        skipButton.style.display = 'none';
+        exitButton.style.display = '';
+        continueButton.style.display = '';
     }
 
     function renderStages() {
@@ -267,6 +352,7 @@
 
     skipButton.addEventListener('click', function () {
         window.clearInterval(timer);
+        adVideo.pause();
         backdrop.hidden = true;
     });
 
@@ -276,39 +362,19 @@
         exitButton.style.display = 'none';
         skipButton.style.display = '';
         title.textContent = 'Watch ad, earn coins';
-        timer = window.setInterval(tick, 1000);
+        if (useVideo) {
+            adVideo.play();
+        } else {
+            timer = window.setInterval(function () {
+                elapsed += 1;
+                tickLogic();
+            }, 1000);
+        }
     });
 
     exitButton.addEventListener('click', function () {
         if (checkpoint) submitEarn(checkpoint.stage);
     });
-
-    async function tick() {
-        elapsed += 1;
-        const total = config.stages[config.stages.length - 1].trigger_sec;
-        const remaining = Math.max(0, total - elapsed);
-        progress.style.width = Math.min(100, elapsed / total * 100) + '%';
-        timerEl.textContent = remaining > 0 ? 'Ad ends in ' + remaining + 's' : '';
-
-        checkpoint = config.stages.find(function (s) { return s.trigger_sec === elapsed; });
-        if (!checkpoint) return;
-        markStage(checkpoint.stage);
-        window.clearInterval(timer);
-
-        if (checkpoint.stage === config.stages[config.stages.length - 1].stage) {
-            await submitEarn(checkpoint.stage);
-            return;
-        }
-
-        const maxCoins = config.stages[config.stages.length - 1].coins;
-        title.textContent = 'Unlocked ' + checkpoint.coins + ' coins';
-        copy.textContent = 'Claim now, or keep watching to earn up to ' + maxCoins + ' coins.';
-        exitButton.textContent = 'Claim ' + checkpoint.coins + ' coins';
-        continueButton.textContent = 'Keep watching';
-        skipButton.style.display = 'none';
-        exitButton.style.display = '';
-        continueButton.style.display = '';
-    }
 
     function markStage(stage) {
         stageList.querySelectorAll('span').forEach(function (item) {
@@ -331,6 +397,7 @@
         });
         const data = await res.json();
         window.clearInterval(timer);
+        adVideo.pause();
         if (data.ok && typeof data.balance !== 'undefined') {
             const balanceEl = document.querySelector('.reward-balance');
             if (balanceEl) balanceEl.textContent = data.balance;
@@ -354,6 +421,24 @@
             continueButton.hidden = true;
         }
     }
+
+    // ── 自动触发：商品页停留 12 秒后弹出 ──
+    (function () {
+        var isProductPage = window.location.pathname.indexOf('/product/') !== -1;
+        if (!isProductPage) return;
+        if (sessionStorage.getItem('ad_auto_shown')) return;
+        var autoBtn = document.querySelector('.reward-ad-button');
+        if (!autoBtn) return;
+
+        var autoTimer = setTimeout(function () {
+            sessionStorage.setItem('ad_auto_shown', '1');
+            openRewardModal(autoBtn);
+        }, 12000);
+
+        document.querySelectorAll('.reward-ad-button').forEach(function (b) {
+            b.addEventListener('click', function () { clearTimeout(autoTimer); }, { once: true });
+        });
+    })();
 })();
 </script>
 {{ end }}
@@ -402,17 +487,25 @@
   }
 
   function claimFlash() {
+    if (ctaBtn.disabled) return;
     ctaBtn.disabled = true;
+    ctaBtn.textContent = '抢购中...';
     fetch('/ads/flash/claim', { method: 'POST' }).then(function(r){ return r.json(); }).then(function(d){
       if (d.coupon_code) {
         textEl.textContent = '🎉 领取成功！优惠券：' + d.coupon_code + '（' + d.discount_pct + '折）';
+        ctaBtn.textContent = '✅ 已抢到';
         ctaBtn.style.display = 'none';
+        // 持久化到 localStorage
+        var wallet = JSON.parse(localStorage.getItem('my_coupons') || '[]');
+        wallet.unshift({coupon_code:d.coupon_code, discount_pct:d.discount_pct, source:'flash', claimed_at:Date.now()});
+        localStorage.setItem('my_coupons', JSON.stringify(wallet.slice(0,20)));
         var closeTimer = setTimeout(function(){ bar.style.display = 'none'; }, 5000);
       } else {
-        textEl.textContent = d.error === 'sold_out' ? '已售罄，下次早点来~' : (d.error || '领取失败');
+        var errMap = {sold_out:'已售罄，下次早点来~', already_claimed:'本场已领取', rate_limited:'操作太频繁'};
+        textEl.textContent = errMap[d.error] || (d.error || '领取失败');
         ctaBtn.style.display = 'none';
       }
-    }).catch(function(){ ctaBtn.disabled = false; });
+    }).catch(function(){ ctaBtn.textContent = '重试'; ctaBtn.disabled = false; });
   }
 
   checkFlash();
@@ -475,11 +568,24 @@
       info.textContent = d.discount_pct + '折券 剩余' + d.remaining + '张 ' + formatSec(d.ends_in_sec) + '后结束';
       btn.style.display = '';
       btn.onclick = function(){
+        if (btn.disabled) return;
         btn.disabled = true;
+        btn.textContent = '抢购中...';
         fetch('/ads/flash/claim',{method:'POST'}).then(function(r){return r.json();}).then(function(rd){
-          if(rd.coupon_code){ info.textContent='券码：'+rd.coupon_code; btn.style.display='none'; }
-          else { info.textContent = rd.error||'失败'; }
-        });
+          if(rd.coupon_code){
+            info.innerHTML='🎉 券码：<strong>'+rd.coupon_code+'</strong>（'+rd.discount_pct+'折） <a href="/cart">去使用 →</a>';
+            btn.textContent='✅ 已抢到';
+            btn.style.display='none';
+            var wallet=JSON.parse(localStorage.getItem('my_coupons')||'[]');
+            wallet.unshift({coupon_code:rd.coupon_code,discount_pct:rd.discount_pct,source:'flash',claimed_at:Date.now()});
+            localStorage.setItem('my_coupons',JSON.stringify(wallet.slice(0,20)));
+          } else {
+            var errMap={sold_out:'😢 已售罄',already_claimed:'✅ 已领取',rate_limited:'⚠️ 太频繁'};
+            info.textContent=errMap[rd.error]||(rd.error||'失败');
+            btn.textContent='马上抢';
+            if(rd.error!=='sold_out'&&rd.error!=='already_claimed'){btn.disabled=false;}
+          }
+        }).catch(function(){info.textContent='网络异常';btn.textContent='马上抢';btn.disabled=false;});
       };
     } else if (d.claimed) {
       info.textContent = '今场已领取 ✓';
@@ -496,11 +602,18 @@
       info.textContent = '正在进行！+' + d.coins_per_claim + '金币 剩余' + d.remaining + '份';
       btn.style.display = '';
       btn.onclick = function(){
+        if (btn.disabled) return;
         btn.disabled = true;
+        btn.textContent = '抢购中...';
         fetch('/ads/rush/claim',{method:'POST'}).then(function(r){return r.json();}).then(function(rd){
-          if(rd.coins_added){ info.textContent='获得+'+rd.coins_added+'金币！余额：'+rd.balance; btn.style.display='none'; }
-          else { info.textContent = rd.error||'失败'; }
-        });
+          if(rd.coins_added){ info.textContent='🎉 获得+'+rd.coins_added+'金币！余额：'+rd.balance; btn.textContent='✅ 已抢'; btn.style.display='none'; }
+          else {
+            var errMap={rush_sold_out:'😢 已抢完',already_claimed:'✅ 已领取',rate_limited:'⚠️ 太频繁'};
+            info.textContent=errMap[rd.error]||(rd.error||'失败');
+            btn.textContent='抢金币';
+            if(rd.error!=='rush_sold_out'&&rd.error!=='already_claimed'){btn.disabled=false;}
+          }
+        }).catch(function(){info.textContent='网络异常';btn.textContent='抢金币';btn.disabled=false;});
       };
     } else if (d.claimed) {
       info.textContent = '本场已领取 ✓';

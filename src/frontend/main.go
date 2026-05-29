@@ -169,6 +169,8 @@ func main() {
 	r.HandleFunc(baseUrl+"/ads/rush/status", svc.rushStatusHandler).Methods(http.MethodGet)
 	r.HandleFunc(baseUrl+"/ads/rush/claim", svc.rushClaimHandler).Methods(http.MethodPost)
 	r.HandleFunc(baseUrl+"/ads/subsidy", svc.subsidyCheckHandler).Methods(http.MethodGet)
+	r.HandleFunc(baseUrl+"/coupon/preview", svc.couponPreviewHandler).Methods(http.MethodGet)
+	r.HandleFunc(baseUrl+"/flash", svc.flashPageHandler).Methods(http.MethodGet)
 	r.HandleFunc(baseUrl+"/tree", svc.treeStatusHandler).Methods(http.MethodGet)
 	r.HandleFunc(baseUrl+"/tree/plant", svc.treePlantHandler).Methods(http.MethodPost)
 	r.HandleFunc(baseUrl+"/tree/water", svc.treeWaterHandler).Methods(http.MethodPost)
