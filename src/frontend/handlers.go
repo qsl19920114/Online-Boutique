@@ -26,6 +26,8 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -502,13 +504,29 @@ func (fe *frontendServer) watchAdHandler(w http.ResponseWriter, r *http.Request)
 		sanitizeMetricLabel(payload.Style),
 		sanitizeMetricLabel(payload.ShowIn),
 	))
-	var out map[string]interface{}
-	err := fe.rewardPost(r.Context(), "/earn", rewardEarnRequest{
+	body, err := json.Marshal(rewardEarnRequest{
 		SessionID: sessionID(r),
 		AdID:      payload.AdID,
 		Stage:     payload.Stage,
-	}, &out)
+	})
 	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	responseBody, statusCode, err := fe.rewardPostRaw(r.Context(), "/earn", body)
+	if err != nil {
+		w.WriteHeader(http.StatusBadGateway)
+		writeJSON(w, map[string]interface{}{"ok": false, "error": err.Error()})
+		return
+	}
+	if statusCode < 200 || statusCode >= 300 {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(statusCode)
+		_, _ = w.Write(responseBody)
+		return
+	}
+	var out map[string]interface{}
+	if err := json.Unmarshal(responseBody, &out); err != nil {
 		w.WriteHeader(http.StatusBadGateway)
 		writeJSON(w, map[string]interface{}{"ok": false, "error": err.Error()})
 		return
@@ -1008,6 +1026,7 @@ func injectCommonTemplateData(r *http.Request, payload map[string]interface{}) m
 		"currentYear":       time.Now().Year(),
 		"baseUrl":           baseUrl,
 		"coin_balance":      -1,
+		"reward_video_urls": rewardVideoURLs(),
 	}
 
 	for k, v := range payload {
@@ -1015,6 +1034,30 @@ func injectCommonTemplateData(r *http.Request, payload map[string]interface{}) m
 	}
 
 	return data
+}
+
+func rewardVideoURLs() []string {
+	videoDir := filepath.Join("static", "ads", "videos")
+	entries, err := os.ReadDir(videoDir)
+	if err != nil {
+		return nil
+	}
+
+	urls := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+
+		ext := strings.ToLower(filepath.Ext(entry.Name()))
+		switch ext {
+		case ".mp4", ".webm", ".ogg":
+			urls = append(urls, baseUrl+"/static/ads/videos/"+url.PathEscape(entry.Name()))
+		}
+	}
+
+	sort.Strings(urls)
+	return urls
 }
 
 func currentCurrency(r *http.Request) string {

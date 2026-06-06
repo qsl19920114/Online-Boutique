@@ -124,13 +124,7 @@ class FakeRedis:
             return 1
         if "-- rewardservice:earn" in script:
             cooldown_key, idem_key, coins_key, log_key = keys
-            if self.exists(cooldown_key):
-                return ["cooldown", self.ttl(cooldown_key)]
-            if self.exists(idem_key):
-                return ["duplicate", self.get(coins_key) or "0"]
             balance = self.incrby(coins_key, int(args[0]))
-            self.set(cooldown_key, "1", ex=int(args[1]))
-            self.set(idem_key, "1", ex=int(args[2]))
             self.lpush(log_key, args[4])
             self.ltrim(log_key, 0, 49)
             self.expire(log_key, int(args[3]))
@@ -331,19 +325,27 @@ class RewardServiceTest(unittest.TestCase):
         self.assertEqual(res.get_json()["coins_added"], 12)
         self.assertEqual(res.get_json()["balance"], 12)
         self.assertEqual(self.redis.get("coins:session-1"), "12")
-        self.assertEqual(self.redis.ttl("cooldown:session-1:ad-1"), 300)
+        self.assertEqual(res.get_json()["bonus_coins"], 0)
 
-    def test_earn_rejects_duplicate_ad_during_cooldown(self):
-        self.client.post(
-            "/earn", json={"session_id": "session-1", "ad_id": "ad-1", "stage": 1}
+    def test_earn_allows_consecutive_completed_videos_with_streak_bonus(self):
+        first = self.client.post(
+            "/earn", json={"session_id": "session-1", "ad_id": "ad-1", "stage": 3}
         )
-        res = self.client.post(
+        second = self.client.post(
             "/earn", json={"session_id": "session-1", "ad_id": "ad-1", "stage": 3}
         )
 
-        self.assertEqual(res.status_code, 429)
-        self.assertEqual(res.get_json()["cooldown_remaining_sec"], 300)
-        self.assertEqual(self.redis.get("coins:session-1"), "5")
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(first.get_json()["coins_added"], 20)
+        self.assertEqual(first.get_json()["bonus_coins"], 0)
+        self.assertEqual(first.get_json()["streak_count"], 1)
+        self.assertEqual(second.status_code, 200)
+        self.assertEqual(second.get_json()["base_coins"], 20)
+        self.assertEqual(second.get_json()["bonus_coins"], 5)
+        self.assertEqual(second.get_json()["coins_added"], 25)
+        self.assertEqual(second.get_json()["streak_count"], 2)
+        self.assertEqual(second.get_json()["balance"], 45)
+        self.assertEqual(self.redis.get("coins:session-1"), "45")
 
     def test_redeem_exchanges_coins_for_coupon(self):
         self.redis.set("coins:session-1", 50)

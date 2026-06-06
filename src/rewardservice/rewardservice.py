@@ -16,7 +16,7 @@ STAGES = [
     {"stage": 3, "trigger_sec": 30, "coins": 20},
 ]
 STAGE_COINS = {item["stage"]: item["coins"] for item in STAGES}
-COOLDOWN_SEC = 300
+COOLDOWN_SEC = 0
 COUPON_TTL_SEC = 7 * 24 * 60 * 60
 COUPON_RULES = {
     50: 90,
@@ -29,6 +29,10 @@ CHECKIN_STREAK_TTL_SEC = 30 * 24 * 60 * 60
 EARN_IDEMPOTENCY_TTL_SEC = 24 * 60 * 60
 EARN_LOG_TTL_SEC = 48 * 60 * 60
 TRANSACTION_TTL_SEC = 30 * 24 * 60 * 60  # 30 days
+WATCH_STREAK_TTL_SEC = 24 * 60 * 60
+WATCH_STREAK_GAP_SEC = 15 * 60
+WATCH_STREAK_BONUS_STEP = 5
+WATCH_STREAK_BONUS_CAP = 20
 DEFAULT_RATELIMITS = {
     "earn": 20,
     "checkin": 5,
@@ -96,6 +100,7 @@ COUPON_VALIDATE_FAILED = Counter(
     ["reason"],
 )
 COOLDOWN_REJECTED = Counter("cooldown_rejected_total", "Ad reward cooldown rejections.")
+WATCH_STREAK_BONUS = Counter("watch_streak_bonus_total", "Bonus coins from consecutive ad watches.")
 RATELIMIT_REJECTED = Counter(
     "ratelimit_rejected_total", "Rate limit rejections by endpoint.", ["endpoint"]
 )
@@ -278,18 +283,6 @@ def create_app(redis_client=None):
             ],
         )
         status_name = result[0]
-        if status_name == "cooldown":
-            COOLDOWN_REJECTED.inc()
-            remaining = int(result[1])
-            return (
-                jsonify(
-                    {
-                        "error": "ad reward is cooling down",
-                        "cooldown_remaining_sec": remaining if remaining > 0 else COOLDOWN_SEC,
-                    }
-                ),
-                429,
-            )
         if status_name == "duplicate":
             return (
                 jsonify(
@@ -300,17 +293,32 @@ def create_app(redis_client=None):
                 ),
                 409,
             )
-
         balance = int(result[1])
+        streak_count = 0
+        bonus_coins = 0
+        if stage == max(STAGE_COINS):
+            streak_count, bonus_coins, balance = _apply_watch_streak_bonus(
+                app.redis,
+                session_id,
+                balance,
+            )
         COINS_EARNED.labels(source="ad").inc(coins_to_add)
+        if bonus_coins > 0:
+            COINS_EARNED.labels(source="ad_streak").inc(bonus_coins)
+            WATCH_STREAK_BONUS.inc(bonus_coins)
         COIN_BALANCE.labels(session_id=session_id).set(balance)
         # 记录交易流水
         _record_transaction(app.redis, session_id, "earn", coins_to_add, f"ad:{ad_id}:stage{stage}")
+        if bonus_coins > 0:
+            _record_transaction(app.redis, session_id, "streak_bonus", bonus_coins, f"streak:{streak_count}")
         return jsonify(
             {
-                "coins_added": coins_to_add,
+                "coins_added": coins_to_add + bonus_coins,
+                "base_coins": coins_to_add,
+                "bonus_coins": bonus_coins,
                 "balance": balance,
                 "stage": stage,
+                "streak_count": streak_count,
                 "max_stage_coins": max(STAGE_COINS.values()),
             }
         )
@@ -887,6 +895,35 @@ def _earn_idem_key(session_id, ad_id, stage, today):
 
 def _earn_log_key(session_id):
     return f"earn_log:{session_id}"
+
+
+def _watch_streak_key(session_id):
+    return f"watch_streak:{session_id}"
+
+
+def _apply_watch_streak_bonus(redis_client, session_id, current_balance, now_ts=None):
+    if now_ts is None:
+        now_ts = int(time.time())
+    streak_key = _watch_streak_key(session_id)
+    streak_data = redis_client.hgetall(streak_key)
+    previous_streak = _int_value(streak_data.get("streak"))
+    last_watch_ts = _int_value(streak_data.get("last_watch_ts"))
+    if last_watch_ts and now_ts - last_watch_ts <= WATCH_STREAK_GAP_SEC:
+        streak_count = previous_streak + 1
+    else:
+        streak_count = 1
+    bonus_coins = min(max(streak_count - 1, 0) * WATCH_STREAK_BONUS_STEP, WATCH_STREAK_BONUS_CAP)
+    if bonus_coins > 0:
+        current_balance = int(redis_client.incrby(_coins_key(session_id), bonus_coins))
+    redis_client.hset(
+        streak_key,
+        mapping={
+            "streak": streak_count,
+            "last_watch_ts": now_ts,
+        },
+    )
+    redis_client.expire(streak_key, WATCH_STREAK_TTL_SEC)
+    return streak_count, bonus_coins, int(current_balance)
 
 
 def _coupon_key(code):

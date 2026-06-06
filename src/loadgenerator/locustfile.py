@@ -51,7 +51,7 @@ def addToCart(l):
     l.client.post("/cart", {
         'product_id': product,
         'quantity': random.randint(1,10)})
-    
+
 def empty_cart(l):
     l.client.post('/cart/empty')
 
@@ -70,10 +70,17 @@ def checkout(l):
         'credit_card_expiration_year': random.randint(current_year, current_year + 70),
         'credit_card_cvv': f"{random.randint(100, 999)}",
     })
-    
-def logout(l):
-    l.client.get('/logout')  
 
+def logout(l):
+    l.client.get('/logout')
+
+def watchVideoAd(l):
+    l.client.post("/ads/watch", json={
+        "ad_id": random.choice(["ad-hairdryer-001", "ad-watch-001", "ad-mug-001"]),
+        "stage": 3,
+        "style": random.choice(["card", "banner", "float"]),
+        "show_in": random.choice(["home", "product", "global"]),
+    })
 
 class UserBehavior(TaskSet):
 
@@ -85,7 +92,8 @@ class UserBehavior(TaskSet):
         browseProduct: 10,
         addToCart: 2,
         viewCart: 3,
-        checkout: 1}
+        checkout: 1,
+        watchVideoAd: 2}
 
 class WebsiteUser(FastHttpUser):
     tasks = [UserBehavior]

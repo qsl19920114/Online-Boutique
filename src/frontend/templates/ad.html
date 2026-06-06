@@ -34,7 +34,7 @@
             data-ad-url="{{$.baseUrl}}{{.ad.RedirectUrl}}"
             data-ad-style="banner"
             data-ad-show-in="product">
-            Watch ad, earn coins
+            Watch video, earn coins
         </button>
     </div>
 </div>
@@ -55,7 +55,7 @@
                 data-ad-url="{{$.baseUrl}}{{.ad.RedirectUrl}}"
                 data-ad-style="card"
                 data-ad-show-in="home">
-                Earn coins
+                Watch video
             </button>
         </div>
     </div>
@@ -77,7 +77,7 @@
                 data-ad-url="{{$.baseUrl}}{{.ad.RedirectUrl}}"
                 data-ad-style="wide-card"
                 data-ad-show-in="recommendations">
-                Watch for coins
+                Watch video
             </button>
         </div>
     </div>
@@ -98,7 +98,7 @@
         data-ad-url="{{$.baseUrl}}{{.ad.RedirectUrl}}"
         data-ad-style="compact"
         data-ad-show-in="cart">
-        Earn
+        Watch
     </button>
 </div>
 {{ end }}
@@ -112,7 +112,7 @@
     data-ad-url="{{$.baseUrl}}{{.ad.RedirectUrl}}"
     data-ad-style="float"
     data-ad-show-in="global"
-    title="Watch ad, earn coins">
+    title="Watch video, earn coins">
     <span>Coins</span>
     <strong>+20</strong>
 </button>
@@ -133,7 +133,7 @@
         data-ad-url="{{$.baseUrl}}{{.ad.RedirectUrl}}"
         data-ad-style="thank"
         data-ad-show-in="order">
-        Watch and earn coins
+        Watch video
     </button>
 </div>
 {{ end }}
@@ -145,7 +145,7 @@
     <div class="reward-modal" role="dialog" aria-modal="true">
         <div class="reward-modal-ad" id="reward-ad-area">
             <span class="reward-modal-ad-badge">Sponsored</span>
-            <div class="reward-modal-ad-image" id="reward-ad-image"></div>
+            <video id="reward-ad-video" class="reward-modal-ad-video" playsinline preload="metadata" controls controlsList="nodownload noplaybackrate"></video>
             <div class="reward-modal-ad-text">
                 <span id="reward-ad-headline"></span>
                 <a id="reward-ad-link" href="#" rel="nofollow noopener noreferrer" target="_blank"
@@ -155,20 +155,19 @@
 
         <div class="reward-modal-earn">
             <div class="reward-modal-earn-row">
-                <span class="reward-modal-title" id="reward-modal-title">Watch ad, earn coins</span>
+                <span class="reward-modal-title" id="reward-modal-title">Watch video to earn coins</span>
                 <span class="reward-modal-timer" id="reward-modal-timer"></span>
             </div>
             <div class="reward-progress">
                 <div class="reward-progress-bar" id="reward-progress-bar"></div>
             </div>
             <p id="reward-modal-copy" class="reward-modal-copy">
-                Keep watching to unlock coins.
+                Stay on the video until it ends. Coins are granted automatically.
             </p>
             <div class="reward-stage-list" id="reward-stage-list"></div>
             <div class="reward-modal-actions">
-                <button class="cymbal-button-secondary reward-modal-skip-btn" id="reward-skip-button" type="button">Skip</button>
-                <button class="cymbal-button-secondary" id="reward-exit-button" type="button" style="display:none">Claim now</button>
-                <button class="cymbal-button-primary" id="reward-continue-button" type="button" style="display:none">Continue</button>
+                <button class="cymbal-button-secondary reward-modal-skip-btn" id="reward-skip-button" type="button">Close</button>
+                <button class="cymbal-button-secondary" id="reward-replay-button" type="button" style="display:none">Replay</button>
             </div>
         </div>
     </div>
@@ -180,7 +179,7 @@
     if (!buttons.length) return;
 
     const backdrop    = document.getElementById('reward-modal-backdrop');
-    const adImage     = document.getElementById('reward-ad-image');
+    const adVideo     = document.getElementById('reward-ad-video');
     const adHeadline  = document.getElementById('reward-ad-headline');
     const adLink      = document.getElementById('reward-ad-link');
     const title       = document.getElementById('reward-modal-title');
@@ -189,49 +188,61 @@
     const progress    = document.getElementById('reward-progress-bar');
     const stageList   = document.getElementById('reward-stage-list');
     const skipButton  = document.getElementById('reward-skip-button');
-    const exitButton  = document.getElementById('reward-exit-button');
-    const continueButton = document.getElementById('reward-continue-button');
-
-    const adImages = [
-        '{{$.baseUrl}}/static/img/products/watch.jpg',
-        '{{$.baseUrl}}/static/img/products/sunglasses.jpg',
-        '{{$.baseUrl}}/static/img/products/loafers.jpg',
-        '{{$.baseUrl}}/static/img/products/hairdryer.jpg',
-        '{{$.baseUrl}}/static/img/products/candle-holder.jpg',
-        '{{$.baseUrl}}/static/img/products/bamboo-glass-jar.jpg',
-        '{{$.baseUrl}}/static/img/products/mug.jpg',
-        '{{$.baseUrl}}/static/img/products/tank-top.jpg'
+    const replayButton = document.getElementById('reward-replay-button');
+    const adVideos = [
+        {{- range $.reward_video_urls }}
+        "{{ . }}",
+        {{- end }}
     ];
 
     let activeButton = null;
     let config = null;
-    let elapsed = 0;
-    let timer = null;
-    let checkpoint = null;
+    let selectedVideo = '';
+    let maxWatchedTime = 0;
+    let rewardIssued = false;
+    let watchInProgress = false;
 
     buttons.forEach(function (button) {
         button.addEventListener('click', function () {
+            if (watchInProgress) {
+                return;
+            }
             openRewardModal(button);
         });
     });
 
     function resetModal() {
-        title.textContent = 'Watch ad, earn coins';
-        copy.textContent = 'Keep watching to unlock coins.';
+        watchInProgress = false;
+        rewardIssued = false;
+        selectedVideo = '';
+        maxWatchedTime = 0;
+        setButtonsDisabled(false);
+        title.textContent = 'Watch video to earn coins';
+        copy.textContent = adVideos.length
+            ? 'Stay on the video until it ends. Coins are granted automatically.'
+            : 'Drop ad videos into static/ads/videos to enable this placement.';
         progress.style.width = '0%';
         timerEl.textContent = '';
         stageList.innerHTML = '';
         skipButton.style.display = '';
-        exitButton.style.display = 'none';
-        continueButton.style.display = 'none';
-        exitButton.hidden = false;
-        continueButton.hidden = false;
+        replayButton.style.display = 'none';
+        replayButton.hidden = false;
+        adVideo.pause();
+        adVideo.removeAttribute('src');
+        adVideo.load();
+    }
+
+    function setButtonsDisabled(disabled) {
+        buttons.forEach(function (button) {
+            button.disabled = disabled;
+        });
     }
 
     async function openRewardModal(button) {
         activeButton = button;
-        window.clearInterval(timer);
         resetModal();
+        watchInProgress = true;
+        setButtonsDisabled(true);
         try {
             const res = await fetch('{{$.baseUrl}}/ads/stage-config');
             config = await res.json();
@@ -241,118 +252,167 @@
             backdrop.hidden = false;
             return;
         }
-        elapsed = 0;
-        checkpoint = null;
-
-        const img = adImages[Math.floor(Math.random() * adImages.length)];
-        adImage.style.backgroundImage = 'url(' + img + ')';
         adHeadline.textContent = button.dataset.adText || button.dataset.adId || 'Special offer';
         adLink.href = button.dataset.adUrl || '#';
         renderStages();
-
         backdrop.hidden = false;
-        tick();
-        timer = window.setInterval(tick, 1000);
-    }
 
-    function renderStages() {
-        stageList.innerHTML = '';
-        config.stages.forEach(function (stage) {
-            const item = document.createElement('span');
-            item.textContent = stage.trigger_sec + 's / +' + stage.coins;
-            item.dataset.stage = stage.stage;
-            stageList.appendChild(item);
-        });
-    }
-
-    skipButton.addEventListener('click', function () {
-        window.clearInterval(timer);
-        backdrop.hidden = true;
-    });
-
-    continueButton.addEventListener('click', function () {
-        checkpoint = null;
-        continueButton.style.display = 'none';
-        exitButton.style.display = 'none';
-        skipButton.style.display = '';
-        title.textContent = 'Watch ad, earn coins';
-        timer = window.setInterval(tick, 1000);
-    });
-
-    exitButton.addEventListener('click', function () {
-        if (checkpoint) submitEarn(checkpoint.stage);
-    });
-
-    async function tick() {
-        elapsed += 1;
-        const total = config.stages[config.stages.length - 1].trigger_sec;
-        const remaining = Math.max(0, total - elapsed);
-        progress.style.width = Math.min(100, elapsed / total * 100) + '%';
-        timerEl.textContent = remaining > 0 ? 'Ad ends in ' + remaining + 's' : '';
-
-        checkpoint = config.stages.find(function (s) { return s.trigger_sec === elapsed; });
-        if (!checkpoint) return;
-        markStage(checkpoint.stage);
-        window.clearInterval(timer);
-
-        if (checkpoint.stage === config.stages[config.stages.length - 1].stage) {
-            await submitEarn(checkpoint.stage);
+        if (!adVideos.length) {
+            title.textContent = 'No ad videos configured';
+            copy.textContent = 'Add .mp4, .webm, or .ogg files to static/ads/videos, then refresh the page.';
             return;
         }
 
-        const maxCoins = config.stages[config.stages.length - 1].coins;
-        title.textContent = 'Unlocked ' + checkpoint.coins + ' coins';
-        copy.textContent = 'Claim now, or keep watching to earn up to ' + maxCoins + ' coins.';
-        exitButton.textContent = 'Claim ' + checkpoint.coins + ' coins';
-        continueButton.textContent = 'Keep watching';
-        skipButton.style.display = 'none';
-        exitButton.style.display = '';
-        continueButton.style.display = '';
-    }
-
-    function markStage(stage) {
-        stageList.querySelectorAll('span').forEach(function (item) {
-            if (Number(item.dataset.stage) <= stage) {
-                item.classList.add('is-unlocked');
-            }
+        selectedVideo = adVideos[chooseVideoIndex()];
+        adVideo.src = selectedVideo;
+        adVideo.currentTime = 0;
+        adVideo.muted = false;
+        adVideo.play().catch(function () {
+            title.textContent = 'Press play to start the ad';
+            copy.textContent = 'Coins will be granted automatically when the video reaches the end.';
         });
     }
 
+    function renderStages() {
+        const finalStage = getFinalStage();
+        stageList.innerHTML = '';
+        if (!finalStage) return;
+
+        const item = document.createElement('span');
+        item.classList.add('is-unlocked');
+        item.textContent = 'Full video / +' + finalStage.coins;
+        stageList.appendChild(item);
+    }
+
+    skipButton.addEventListener('click', function () {
+        adVideo.pause();
+        backdrop.hidden = true;
+        resetModal();
+    });
+
+    replayButton.addEventListener('click', function () {
+        rewardIssued = false;
+        maxWatchedTime = 0;
+        progress.style.width = '0%';
+        timerEl.textContent = '';
+        replayButton.style.display = 'none';
+        skipButton.style.display = '';
+        title.textContent = 'Watch video to earn coins';
+        copy.textContent = 'Stay on the video until it ends. Coins are granted automatically.';
+        adVideo.currentTime = 0;
+        adVideo.play().catch(function () {});
+    });
+
+    adVideo.addEventListener('loadedmetadata', function () {
+        if (!Number.isFinite(adVideo.duration) || adVideo.duration <= 0) return;
+        timerEl.textContent = formatRemaining(adVideo.duration);
+    });
+
+    adVideo.addEventListener('timeupdate', function () {
+        if (!Number.isFinite(adVideo.duration) || adVideo.duration <= 0) return;
+        maxWatchedTime = Math.max(maxWatchedTime, adVideo.currentTime);
+        progress.style.width = Math.min(100, (adVideo.currentTime / adVideo.duration) * 100) + '%';
+        timerEl.textContent = formatRemaining(Math.max(0, adVideo.duration - adVideo.currentTime));
+    });
+
+    adVideo.addEventListener('seeking', function () {
+        if (rewardIssued) return;
+        if (adVideo.currentTime > maxWatchedTime + 0.5) {
+            adVideo.currentTime = maxWatchedTime;
+        }
+    });
+
+    adVideo.addEventListener('ended', function () {
+        const finalStage = getFinalStage();
+        if (finalStage && !rewardIssued) {
+            submitEarn(finalStage.stage);
+        }
+    });
+
     async function submitEarn(stage) {
+        rewardIssued = true;
         const res = await fetch('{{$.baseUrl}}/ads/watch', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({
-                ad_id: activeButton.dataset.adId || 'default-ad',
+                ad_id: buildRewardAdId(),
                 stage: stage,
                 style: activeButton.dataset.adStyle || 'unknown',
                 show_in: activeButton.dataset.adShowIn || 'unknown'
             })
         });
         const data = await res.json();
-        window.clearInterval(timer);
         if (data.ok && typeof data.balance !== 'undefined') {
             const balanceEl = document.querySelector('.reward-balance');
             if (balanceEl) balanceEl.textContent = data.balance;
-            title.textContent = '+' + data.coins_added + ' coins earned';
-            copy.textContent = 'Your balance is now ' + data.balance + ' coins. Visit Rewards Center to redeem.';
+            title.textContent = 'Video completed';
+            copy.textContent = successMessage(data);
             progress.style.width = '100%';
             timerEl.textContent = '';
             skipButton.style.display = 'none';
-            exitButton.hidden = true;
-            continueButton.hidden = true;
+            replayButton.hidden = true;
             setTimeout(function () {
+                adVideo.pause();
                 backdrop.hidden = true;
                 resetModal();
             }, 2000);
         } else {
-            title.textContent = 'Reward not available';
-            copy.textContent = data.error || 'Please try another ad in a moment.';
+            rewardIssued = false;
+            title.textContent = data.error === 'ad reward is cooling down'
+                ? 'This video is cooling down'
+                : 'Reward not available';
+            copy.textContent = data.error === 'ad reward is cooling down'
+                ? formatCooldownMessage(data.cooldown_remaining_sec)
+                : (data.error || 'Please try another ad in a moment.');
             timerEl.textContent = '';
             skipButton.style.display = '';
-            exitButton.hidden = true;
-            continueButton.hidden = true;
+            replayButton.hidden = false;
+            replayButton.style.display = '';
+            replayButton.textContent = 'Replay';
         }
+    }
+
+    function buildRewardAdId() {
+        return activeButton.dataset.adId || 'default-ad';
+    }
+
+    function chooseVideoIndex() {
+        if (adVideos.length <= 1) return 0;
+        return Math.floor(Math.random() * adVideos.length);
+    }
+
+    function getFinalStage() {
+        if (!config || !config.stages || !config.stages.length) return null;
+        return config.stages[config.stages.length - 1];
+    }
+
+    function formatRemaining(seconds) {
+        const remaining = Math.max(0, Math.ceil(seconds));
+        const minutes = Math.floor(remaining / 60);
+        const secs = remaining % 60;
+        return minutes > 0
+            ? minutes + 'm ' + String(secs).padStart(2, '0') + 's left'
+            : secs + 's left';
+    }
+
+    function formatCooldownMessage(seconds) {
+        const remaining = Math.max(0, Number(seconds) || 0);
+        const minutes = Math.floor(remaining / 60);
+        const secs = remaining % 60;
+        if (minutes > 0) {
+            return 'Please try again in ' + minutes + 'm ' + String(secs).padStart(2, '0') + 's.';
+        }
+        return 'Please try again in ' + secs + 's.';
+    }
+
+    function successMessage(data) {
+        const totalCoins = Number(data.coins_added || 0);
+        const bonusCoins = Number(data.bonus_coins || 0);
+        const streakCount = Number(data.streak_count || 1);
+        if (bonusCoins > 0) {
+            return '+' + totalCoins + ' coins granted automatically, including +' + bonusCoins + ' combo bonus for streak #' + streakCount + '. Your balance is now ' + data.balance + '.';
+        }
+        return '+' + totalCoins + ' coins granted automatically. Your balance is now ' + data.balance + '.';
     }
 })();
 </script>
