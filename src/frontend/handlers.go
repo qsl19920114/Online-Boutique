@@ -22,7 +22,7 @@ import (
 	"html/template"
 	"io"
 	"math/rand"
-	"net"
+	"net/url"
 	"net/http"
 	"net/url"
 	"os"
@@ -387,7 +387,19 @@ func (fe *frontendServer) placeOrderHandler(w http.ResponseWriter, r *http.Reque
 		})
 	if err != nil {
 		frontendCounterInc("checkout_failure_total")
-		renderHTTPError(log, r, w, errors.Wrap(err, "failed to complete the order"), http.StatusInternalServerError)
+		errMsg := fmt.Sprintf("%+v", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		errData := map[string]interface{}{
+			"error":       errMsg,
+			"status_code": http.StatusInternalServerError,
+			"status":      http.StatusText(http.StatusInternalServerError),
+		}
+		if couponCode != "" {
+			errData["refunded_coupon"] = couponCode
+		}
+		if templateErr := templates.ExecuteTemplate(w, "error", injectCommonTemplateData(r, errData)); templateErr != nil {
+			log.Println(templateErr)
+		}
 		return
 	}
 	frontendCounterInc("checkout_success_total")
@@ -684,6 +696,112 @@ func (fe *frontendServer) subsidyCheckHandler(w http.ResponseWriter, r *http.Req
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
+	w.Write(result)
+}
+
+// ────────────────────────────── 优惠券预览 + 秒杀落地页 ──────────────────── //
+
+func (fe *frontendServer) couponPreviewHandler(w http.ResponseWriter, r *http.Request) {
+	code := strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("code")))
+	if code == "" {
+		writeJSON(w, map[string]interface{}{"valid": false, "error": "missing code"})
+		return
+	}
+	result, err := fe.rewardGetRaw(r.Context(), "/coupon/info?code="+url.QueryEscape(code))
+	if err != nil {
+		writeJSON(w, map[string]interface{}{"valid": false, "error": "service unavailable"})
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(result)
+}
+
+func (fe *frontendServer) flashPageHandler(w http.ResponseWriter, r *http.Request) {
+	currencies, err := fe.getCurrencies(r.Context())
+	if err != nil {
+		renderHTTPError(log, r, w, errors.Wrap(err, "could not retrieve currencies"), http.StatusInternalServerError)
+		return
+	}
+	if err := templates.ExecuteTemplate(w, "flash", injectCommonTemplateData(r, map[string]interface{}{
+		"show_currency": false,
+		"currencies":    currencies,
+		"coin_balance":  fe.rewardBalanceOrDefault(r.Context(), sessionID(r)),
+	})); err != nil {
+		log.Println(err)
+	}
+}
+
+// ────────────────────────────── 种树浇水 ──────────────────────────────────── //
+
+func (fe *frontendServer) treeStatusHandler(w http.ResponseWriter, r *http.Request) {
+	sid := sessionID(r)
+	result, err := fe.rewardGetRaw(r.Context(), "/tree?session_id="+sid)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(result)
+}
+
+func (fe *frontendServer) treePlantHandler(w http.ResponseWriter, r *http.Request) {
+	sid := sessionID(r)
+	body, _ := json.Marshal(map[string]string{"session_id": sid})
+	result, statusCode, err := fe.rewardPostRaw(r.Context(), "/tree/plant", body)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
+	w.Write(result)
+}
+
+func (fe *frontendServer) treeWaterHandler(w http.ResponseWriter, r *http.Request) {
+	sid := sessionID(r)
+	body, _ := json.Marshal(map[string]string{"session_id": sid})
+	result, statusCode, err := fe.rewardPostRaw(r.Context(), "/tree/water", body)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
+	w.Write(result)
+}
+
+func (fe *frontendServer) treeWaterAdHandler(w http.ResponseWriter, r *http.Request) {
+	var payload struct {
+		AdID string `json:"ad_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	body, _ := json.Marshal(map[string]interface{}{
+		"session_id": sessionID(r),
+		"ad_id":      payload.AdID,
+	})
+	result, statusCode, err := fe.rewardPostRaw(r.Context(), "/tree/water/ad", body)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
+	w.Write(result)
+}
+
+func (fe *frontendServer) treeHarvestHandler(w http.ResponseWriter, r *http.Request) {
+	sid := sessionID(r)
+	body, _ := json.Marshal(map[string]string{"session_id": sid})
+	result, statusCode, err := fe.rewardPostRaw(r.Context(), "/tree/harvest", body)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
 	w.Write(result)
 }
 

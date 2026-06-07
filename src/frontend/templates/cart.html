@@ -164,10 +164,16 @@
 
                         <div class="form-row">
                             <div class="col cymbal-form-field">
-                                <label for="coupon_code">Coupon Code</label>
-                                <input type="text" id="coupon_code"
-                                    name="coupon_code"
-                                    placeholder="COIN-ABC123-0001">
+                                <label for="coupon_code">优惠券</label>
+                                <div class="coupon-input-wrap">
+                                    <input type="text" id="coupon_code" name="coupon_code"
+                                        placeholder="输入券码或从券包选择"
+                                        autocomplete="off">
+                                    <button type="button" class="coupon-picker-btn" id="coupon-picker-btn"
+                                            title="从我的券包选择">🎟️ 选券</button>
+                                </div>
+                                <div id="coupon-preview" class="coupon-preview" style="display:none"></div>
+                                <div id="coupon-dropdown" class="coupon-dropdown" style="display:none"></div>
                             </div>
                         </div>
 
@@ -247,3 +253,101 @@
     {{ end }}
     {{ template "footer" . }}
 {{ end }}
+
+<script>
+(function () {
+    var input = document.getElementById('coupon_code');
+    var pickerBtn = document.getElementById('coupon-picker-btn');
+    var dropdown = document.getElementById('coupon-dropdown');
+    var preview = document.getElementById('coupon-preview');
+
+    if (!input) return;
+
+    // 1. 自动填入 sessionStorage 中的待用券
+    var pendingCoupon = sessionStorage.getItem('pending_coupon');
+    if (pendingCoupon) {
+        input.value = pendingCoupon;
+        sessionStorage.removeItem('pending_coupon');
+        fetchPreview(pendingCoupon);
+    }
+
+    // 2. 输入框失焦时预览折扣
+    input.addEventListener('blur', function () {
+        var code = input.value.trim().toUpperCase();
+        if (code.length > 5) fetchPreview(code);
+        else { preview.style.display = 'none'; }
+    });
+
+    // 3. 点击"选券"按钮展开下拉
+    pickerBtn.addEventListener('click', function () {
+        if (dropdown.style.display !== 'none') {
+            dropdown.style.display = 'none';
+            return;
+        }
+        dropdown.innerHTML = '<div style="padding:8px;color:#666">加载中...</div>';
+        dropdown.style.display = '';
+        fetch('/coupons?status=pending')
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                var coupons = data.coupons || [];
+                // 合并 localStorage
+                var local = JSON.parse(localStorage.getItem('my_coupons') || '[]');
+                var serverCodes = coupons.map(function(c){ return c.coupon_code; });
+                local.forEach(function (lc) {
+                    if (serverCodes.indexOf(lc.coupon_code) === -1) {
+                        coupons.unshift({
+                            coupon_code: lc.coupon_code,
+                            discount_pct: lc.discount_pct || 70,
+                            source: lc.source || 'flash',
+                        });
+                    }
+                });
+                if (coupons.length === 0) {
+                    dropdown.innerHTML = '<div class="coupon-dropdown-empty">暂无可用优惠券，<a href="/rewards">去领取</a></div>';
+                    return;
+                }
+                dropdown.innerHTML = coupons.map(function (c) {
+                    return '<div class="coupon-dropdown-item" data-code="' + c.coupon_code + '">' +
+                        '<span class="coupon-dropdown-discount">' + (100 - c.discount_pct) + '% OFF</span>' +
+                        '<span class="coupon-dropdown-code">' + c.coupon_code + '</span>' +
+                        '<span class="coupon-dropdown-source">' + (c.source === 'flash' ? '⚡秒杀' : '🪙兑换') + '</span>' +
+                    '</div>';
+                }).join('');
+                dropdown.querySelectorAll('.coupon-dropdown-item').forEach(function (item) {
+                    item.addEventListener('click', function () {
+                        input.value = item.dataset.code;
+                        dropdown.style.display = 'none';
+                        fetchPreview(item.dataset.code);
+                    });
+                });
+            });
+    });
+
+    // 点击外部关闭下拉
+    document.addEventListener('click', function (e) {
+        if (!e.target.closest('.coupon-input-wrap') && !e.target.closest('#coupon-dropdown')) {
+            dropdown.style.display = 'none';
+        }
+    });
+
+    // 4. 折扣预览
+    function fetchPreview(code) {
+        fetch('/coupon/preview?code=' + encodeURIComponent(code))
+            .then(function (r) { return r.json(); })
+            .then(function (d) {
+                preview.style.display = '';
+                if (d.valid) {
+                    preview.innerHTML = '✅ 券有效：' + (100 - d.discount_pct) + '% OFF' +
+                        (d.source === 'flash' ? '（秒杀券）' : '');
+                    preview.className = 'coupon-preview coupon-preview-valid';
+                } else {
+                    preview.innerHTML = '❌ ' + (d.error || '券码无效');
+                    preview.className = 'coupon-preview coupon-preview-invalid';
+                }
+            })
+            .catch(function () {
+                preview.style.display = 'none';
+            });
+    }
+})();
+</script>

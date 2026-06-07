@@ -648,6 +648,53 @@ class RewardServiceTest(unittest.TestCase):
         res = self.client.get("/coupons")
         self.assertEqual(res.status_code, 400)
 
+    # ── coupon/info 只读查询 ──────────────────────────────────────────────── #
+
+    def test_coupon_info_returns_valid_pending_coupon(self):
+        import time as _time
+        self.redis.hset(
+            "coupon:COIN-INFO-0001",
+            mapping={
+                "discount_pct": "90",
+                "session_id": "session-1",
+                "status": "pending",
+                "created_at": str(int(_time.time())),
+                "cost_coins": "50",
+                "source": "redeem",
+            },
+        )
+        res = self.client.get("/coupon/info?code=COIN-INFO-0001")
+        self.assertEqual(res.status_code, 200)
+        body = res.get_json()
+        self.assertTrue(body["valid"])
+        self.assertEqual(body["discount_pct"], 90)
+        self.assertEqual(body["source"], "redeem")
+        self.assertEqual(body["cost_coins"], 50)
+
+    def test_coupon_info_rejects_used_coupon(self):
+        import time as _time
+        self.redis.hset(
+            "coupon:COIN-INFO-0002",
+            mapping={
+                "discount_pct": "80",
+                "session_id": "session-1",
+                "status": "used",
+                "created_at": str(int(_time.time())),
+                "cost_coins": "100",
+                "source": "redeem",
+            },
+        )
+        res = self.client.get("/coupon/info?code=COIN-INFO-0002")
+        self.assertEqual(res.status_code, 400)
+        body = res.get_json()
+        self.assertFalse(body["valid"])
+        self.assertEqual(body["status"], "used")
+
+    def test_coupon_info_returns_404_for_nonexistent(self):
+        res = self.client.get("/coupon/info?code=COIN-FAKE-0000")
+        self.assertEqual(res.status_code, 404)
+        self.assertFalse(res.get_json()["valid"])
+
     # ── flash_claim atomic coupon ─────────────────────────────────────────── #
 
     def test_flash_claim_creates_coupon_atomically(self):

@@ -56,6 +56,20 @@
                 <button class="cymbal-button-primary" type="submit">Redeem</button>
             </form>
         </div>
+
+        <!-- ── 我的券包 ── -->
+        <div class="reward-wallet-section" id="reward-wallet">
+            <div class="reward-wallet-header">
+                <h4>🎟️ 我的券包</h4>
+                <div class="reward-wallet-tabs">
+                    <button class="wallet-tab active" data-status="pending">可用</button>
+                    <button class="wallet-tab" data-status="used">已使用</button>
+                </div>
+            </div>
+            <div id="reward-wallet-list" class="reward-wallet-list">
+                <div class="reward-wallet-loading">加载中...</div>
+            </div>
+        </div>
     </section>
 </main>
 <script>
@@ -75,6 +89,81 @@
         button.disabled = false;
         button.textContent = 'Try again';
     });
+})();
+</script>
+
+<script>
+(function () {
+    var currentStatus = 'pending';
+
+    function loadCoupons(status) {
+        var list = document.getElementById('reward-wallet-list');
+        list.innerHTML = '<div class="reward-wallet-loading">加载中...</div>';
+        fetch('{{ $.baseUrl }}/coupons?status=' + status)
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                var coupons = data.coupons || [];
+                // 合并 localStorage 中本地记录的券（仅 pending 时）
+                if (status === 'pending') {
+                    var local = JSON.parse(localStorage.getItem('my_coupons') || '[]');
+                    var serverCodes = coupons.map(function(c){ return c.coupon_code; });
+                    local.forEach(function (lc) {
+                        if (serverCodes.indexOf(lc.coupon_code) === -1) {
+                            coupons.unshift({
+                                coupon_code: lc.coupon_code,
+                                discount_pct: lc.discount_pct || 70,
+                                status: 'pending',
+                                source: lc.source || 'flash',
+                                created_at: lc.claimed_at ? Math.floor(lc.claimed_at/1000) : 0,
+                                cost_coins: 0,
+                            });
+                        }
+                    });
+                }
+                if (coupons.length === 0) {
+                    list.innerHTML = '<div class="reward-wallet-empty">暂无' + (status === 'pending' ? '可用' : '已使用') + '优惠券</div>';
+                    return;
+                }
+                list.innerHTML = coupons.map(function (c) {
+                    var sourceLabel = c.source === 'flash' ? '⚡秒杀券' : '🪙兑换券';
+                    var discountLabel = (100 - c.discount_pct) + '% OFF';
+                    var expireTs = (c.created_at || 0) + 7 * 24 * 3600;
+                    var expireDate = expireTs > 0 ? new Date(expireTs * 1000).toLocaleDateString() : '—';
+                    return '<div class="reward-wallet-card' + (status === 'used' ? ' is-used' : '') + '">' +
+                        '<div class="wallet-card-left">' +
+                            '<span class="wallet-card-discount">' + discountLabel + '</span>' +
+                            '<span class="wallet-card-source">' + sourceLabel + '</span>' +
+                        '</div>' +
+                        '<div class="wallet-card-right">' +
+                            '<code class="wallet-card-code">' + c.coupon_code + '</code>' +
+                            '<span class="wallet-card-expire">有效期至 ' + expireDate + '</span>' +
+                            (status === 'pending'
+                                ? '<button class="cymbal-button-primary wallet-card-use-btn" onclick="useCoupon(\'' + c.coupon_code + '\')">去使用</button>'
+                                : '') +
+                        '</div>' +
+                    '</div>';
+                }).join('');
+            })
+            .catch(function () {
+                list.innerHTML = '<div class="reward-wallet-empty">加载失败，请刷新重试</div>';
+            });
+    }
+
+    window.useCoupon = function (code) {
+        sessionStorage.setItem('pending_coupon', code);
+        window.location.href = '{{ $.baseUrl }}/cart';
+    };
+
+    document.querySelectorAll('.wallet-tab').forEach(function (tab) {
+        tab.addEventListener('click', function () {
+            document.querySelectorAll('.wallet-tab').forEach(function (t) { t.classList.remove('active'); });
+            tab.classList.add('active');
+            currentStatus = tab.dataset.status;
+            loadCoupons(currentStatus);
+        });
+    });
+
+    loadCoupons('pending');
 })();
 </script>
 {{ template "footer" . }}
